@@ -42,7 +42,6 @@ describe('fillLazyItemsTillLeafWithHead', () => {
       head: null,
       prefetchHead: null,
       parallelRoutes: new Map(),
-      lazyDataResolved: false,
       loading: null,
     }
     const existingCache: CacheNode = {
@@ -51,7 +50,6 @@ describe('fillLazyItemsTillLeafWithHead', () => {
       prefetchRsc: null,
       head: null,
       prefetchHead: null,
-      lazyDataResolved: false,
       loading: null,
       parallelRoutes: new Map([
         [
@@ -65,7 +63,6 @@ describe('fillLazyItemsTillLeafWithHead', () => {
                 prefetchRsc: null,
                 head: null,
                 prefetchHead: null,
-                lazyDataResolved: false,
                 loading: null,
                 parallelRoutes: new Map([
                   [
@@ -79,7 +76,6 @@ describe('fillLazyItemsTillLeafWithHead', () => {
                           prefetchRsc: null,
                           head: null,
                           prefetchHead: null,
-                          lazyDataResolved: false,
                           loading: null,
                           parallelRoutes: new Map(),
                         },
@@ -102,13 +98,16 @@ describe('fillLazyItemsTillLeafWithHead', () => {
 
     // Mirrors the way router-reducer values are passed in.
     const flightDataPath = flightData[0]
-    const [treePatch, cacheNodeSeedData, head] = flightDataPath.slice(-3)
+    const [treePatch, cacheNodeSeedData, head /*, isHeadPartial */] =
+      flightDataPath.slice(-4)
+
     fillLazyItemsTillLeafWithHead(
       cache,
       existingCache,
       treePatch,
       cacheNodeSeedData,
-      head
+      head,
+      undefined
     )
 
     const expectedCache: CacheNode = {
@@ -117,7 +116,6 @@ describe('fillLazyItemsTillLeafWithHead', () => {
       prefetchRsc: null,
       head: null,
       prefetchHead: null,
-      lazyDataResolved: false,
       loading: null,
       parallelRoutes: new Map([
         [
@@ -131,7 +129,6 @@ describe('fillLazyItemsTillLeafWithHead', () => {
                 prefetchRsc: null,
                 head: null,
                 prefetchHead: null,
-                lazyDataResolved: false,
                 loading: null,
                 parallelRoutes: new Map([
                   [
@@ -141,7 +138,6 @@ describe('fillLazyItemsTillLeafWithHead', () => {
                         'about',
                         {
                           lazyData: null,
-                          lazyDataResolved: false,
                           loading: null,
                           parallelRoutes: new Map([
                             [
@@ -156,12 +152,7 @@ describe('fillLazyItemsTillLeafWithHead', () => {
                                     prefetchHead: null,
                                     loading: null,
                                     parallelRoutes: new Map(),
-                                    lazyDataResolved: false,
-                                    head: (
-                                      <>
-                                        <title>About page!</title>
-                                      </>
-                                    ),
+                                    head: null,
                                   },
                                 ],
                               ]),
@@ -183,7 +174,6 @@ describe('fillLazyItemsTillLeafWithHead', () => {
                           prefetchHead: null,
                           loading: null,
                           parallelRoutes: new Map(),
-                          lazyDataResolved: false,
                         },
                       ],
                     ]),

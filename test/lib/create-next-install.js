@@ -90,9 +90,9 @@ async function createNextInstall({
 
         const nativePath = path.join(origRepoDir, 'packages/next-swc/native')
 
-        const hasNativeBinary = fs
-          .readdirSync(nativePath)
-          .some((item) => item.endsWith('.node'))
+        const hasNativeBinary = fs.existsSync(nativePath)
+          ? fs.readdirSync(nativePath).some((item) => item.endsWith('.node'))
+          : false
 
         if (hasNativeBinary) {
           process.env.NEXT_TEST_NATIVE_DIR = nativePath
@@ -100,8 +100,17 @@ async function createNextInstall({
           const swcDirectory = fs
             .readdirSync(path.join(origRepoDir, 'node_modules/@next'))
             .find((directory) => directory.startsWith('swc-'))
-          process.env.NEXT_TEST_NATIVE_DIR = swcDirectory
+          process.env.NEXT_TEST_NATIVE_DIR = path.join(
+            origRepoDir,
+            'node_modules/@next',
+            swcDirectory
+          )
         }
+
+        // log for clarity of which version we're using
+        require('console').log({
+          swcDirectory: process.env.NEXT_TEST_NATIVE_DIR,
+        })
 
         pkgPaths = await rootSpan
           .traceChild('linkPackages')
@@ -121,12 +130,18 @@ async function createNextInstall({
         }, {}),
       }
 
+      const scripts = {
+        debug: `NEXT_PRIVATE_SKIP_CANARY_CHECK=1 NEXT_TELEMETRY_DISABLED=1 NEXT_TEST_NATIVE_DIR=${process.env.NEXT_TEST_NATIVE_DIR} node --inspect --trace-deprecation --enable-source-maps node_modules/next/dist/bin/next`,
+        ...packageJson.scripts,
+      }
+
       await fs.ensureDir(installDir)
       await fs.writeFile(
         path.join(installDir, 'package.json'),
         JSON.stringify(
           {
             ...packageJson,
+            scripts,
             dependencies: combinedDependencies,
             private: true,
             // Add resolutions if provided.
@@ -157,10 +172,6 @@ async function createNextInstall({
         await rootSpan
           .traceChild('run generic install command', combinedDependencies)
           .traceAsyncFn(() => installDependencies(installDir, tmpDir))
-      }
-
-      if (!keepRepoDir && tmpRepoDir) {
-        await fs.remove(tmpRepoDir)
       }
 
       return {

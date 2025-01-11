@@ -1,4 +1,3 @@
-import React from 'react'
 import { invalidateCacheByRouterState } from './invalidate-cache-by-router-state'
 import type { CacheNode } from '../../../shared/lib/app-router-context.shared-runtime'
 import type { FlightRouterState } from '../../../server/app-render/types'
@@ -13,7 +12,6 @@ describe('invalidateCacheByRouterState', () => {
       prefetchHead: null,
       loading: null,
       parallelRoutes: new Map(),
-      lazyDataResolved: false,
     }
     const existingCache: CacheNode = {
       lazyData: null,
@@ -21,7 +19,6 @@ describe('invalidateCacheByRouterState', () => {
       prefetchRsc: null,
       head: null,
       prefetchHead: null,
-      lazyDataResolved: false,
       loading: null,
       parallelRoutes: new Map([
         [
@@ -35,7 +32,6 @@ describe('invalidateCacheByRouterState', () => {
                 prefetchRsc: null,
                 head: null,
                 prefetchHead: null,
-                lazyDataResolved: false,
                 loading: null,
                 parallelRoutes: new Map([
                   [
@@ -49,7 +45,6 @@ describe('invalidateCacheByRouterState', () => {
                           prefetchRsc: null,
                           head: null,
                           prefetchHead: null,
-                          lazyDataResolved: false,
                           loading: null,
                           parallelRoutes: new Map(),
                         },
@@ -92,7 +87,6 @@ describe('invalidateCacheByRouterState', () => {
       prefetchRsc: null,
       head: null,
       prefetchHead: null,
-      lazyDataResolved: false,
       loading: null,
       parallelRoutes: new Map([['children', new Map()]]),
     }

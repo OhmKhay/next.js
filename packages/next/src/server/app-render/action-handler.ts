@@ -1,22 +1,30 @@
-import type { IncomingHttpHeaders, OutgoingHttpHeaders } from 'http'
+import type { IncomingHttpHeaders, OutgoingHttpHeaders } from 'node:http'
 import type { SizeLimit } from '../../types'
-import type { RequestStore } from '../../client/components/request-async-storage.external'
+import type { RequestStore } from '../app-render/work-unit-async-storage.external'
 import type { AppRenderContext, GenerateFlight } from './app-render'
-import type { AppPageModule } from '../../server/future/route-modules/app-page/module'
+import type { AppPageModule } from '../route-modules/app-page/module'
 import type { BaseNextRequest, BaseNextResponse } from '../base-http'
 
 import {
   RSC_HEADER,
   RSC_CONTENT_TYPE_HEADER,
+  NEXT_ROUTER_STATE_TREE_HEADER,
+  ACTION_HEADER,
 } from '../../client/components/app-router-headers'
-import { isNotFoundError } from '../../client/components/not-found'
 import {
-  getRedirectStatusCodeFromError,
+  getAccessFallbackHTTPStatus,
+  isHTTPAccessFallbackError,
+} from '../../client/components/http-access-fallback/http-access-fallback'
+import {
+  getRedirectTypeFromError,
   getURLFromRedirectError,
-  isRedirectError,
 } from '../../client/components/redirect'
+import {
+  isRedirectError,
+  type RedirectType,
+} from '../../client/components/redirect-error'
 import RenderResult from '../render-result'
-import type { StaticGenerationStore } from '../../client/components/static-generation-async-storage.external'
+import type { WorkStore } from '../app-render/work-async-storage.external'
 import { FlightRenderResult } from './flight-render-result'
 import {
   filterReqHeaders,
@@ -39,6 +47,10 @@ import { HeadersAdapter } from '../web/spec-extension/adapters/headers'
 import { fromNodeOutgoingHttpHeaders } from '../web/utils'
 import { selectWorkerForForwarding } from './action-utils'
 import { isNodeNextRequest, isWebNextRequest } from '../base-http/helpers'
+import { RedirectStatusCode } from '../../client/components/redirect-status-code'
+import { synchronizeMutableCookies } from '../async-storage/request-store'
+import type { TemporaryReferenceSet } from 'react-server-dom-webpack/server.edge'
+import { workUnitAsyncStorage } from '../app-render/work-unit-async-storage.external'
 
 function formDataFromSearchQueryString(query: string) {
   const searchParams = new URLSearchParams(query)
@@ -106,18 +118,17 @@ function getForwardedHeaders(
 async function addRevalidationHeader(
   res: BaseNextResponse,
   {
-    staticGenerationStore,
+    workStore,
     requestStore,
   }: {
-    staticGenerationStore: StaticGenerationStore
+    workStore: WorkStore
     requestStore: RequestStore
   }
 ) {
   await Promise.all([
-    staticGenerationStore.incrementalCache?.revalidateTag(
-      staticGenerationStore.revalidatedTags || []
-    ),
-    ...Object.values(staticGenerationStore.pendingRevalidates || {}),
+    workStore.incrementalCache?.revalidateTag(workStore.revalidatedTags || []),
+    ...Object.values(workStore.pendingRevalidates || {}),
+    ...(workStore.pendingRevalidateWrites || []),
   ])
 
   // If a tag was revalidated, the client router needs to invalidate all the
@@ -133,7 +144,7 @@ async function addRevalidationHeader(
   // TODO-APP: Currently paths are treated as tags, so the second element of the tuple
   // is always empty.
 
-  const isTagRevalidated = staticGenerationStore.revalidatedTags?.length ? 1 : 0
+  const isTagRevalidated = workStore.revalidatedTags?.length ? 1 : 0
   const isCookieRevalidated = getModifiedCookieValues(
     requestStore.mutableCookies
   ).length
@@ -155,7 +166,7 @@ async function createForwardedActionResponse(
   host: Host,
   workerPathname: string,
   basePath: string,
-  staticGenerationStore: StaticGenerationStore
+  workStore: WorkStore
 ) {
   if (!host) {
     throw new Error(
@@ -170,8 +181,7 @@ async function createForwardedActionResponse(
   // with the response from the forwarded worker
   forwardedHeaders.set('x-action-forwarded', '1')
 
-  const proto =
-    staticGenerationStore.incrementalCache?.requestProtocol || 'https'
+  const proto = workStore.incrementalCache?.requestProtocol || 'https'
 
   // For standalone or the serverful mode, use the internal origin directly
   // other than the host headers from the request.
@@ -180,7 +190,7 @@ async function createForwardedActionResponse(
   const fetchUrl = new URL(`${origin}${basePath}${workerPathname}`)
 
   try {
-    let body: BodyInit | AsyncIterable<any> | undefined
+    let body: BodyInit | ReadableStream<Uint8Array> | undefined
     if (
       // The type check here ensures that `req` is correctly typed, and the
       // environment variable check provides dead code elimination.
@@ -216,7 +226,9 @@ async function createForwardedActionResponse(
       },
     })
 
-    if (response.headers.get('content-type') === RSC_CONTENT_TYPE_HEADER) {
+    if (
+      response.headers.get('content-type')?.startsWith(RSC_CONTENT_TYPE_HEADER)
+    ) {
       // copy the headers from the redirect response to the response we're sending
       for (const [key, value] of response.headers) {
         if (!actionsForbiddenHeaders.includes(key)) {
@@ -237,27 +249,59 @@ async function createForwardedActionResponse(
   return RenderResult.fromStatic('{}')
 }
 
+/**
+ * Returns the parsed redirect URL if we deem that it is hosted by us.
+ *
+ * We handle both relative and absolute redirect URLs.
+ *
+ * In case the redirect URL is not relative to the application we return `null`.
+ */
+function getAppRelativeRedirectUrl(
+  basePath: string,
+  host: Host,
+  redirectUrl: string
+): URL | null {
+  if (redirectUrl.startsWith('/') || redirectUrl.startsWith('.')) {
+    // Make sure we are appending the basePath to relative URLS
+    return new URL(`${basePath}${redirectUrl}`, 'http://n')
+  }
+
+  const parsedRedirectUrl = new URL(redirectUrl)
+
+  if (host?.value !== parsedRedirectUrl.host) {
+    return null
+  }
+
+  // At this point the hosts are the same, just confirm we
+  // are routing to a path underneath the `basePath`
+  return parsedRedirectUrl.pathname.startsWith(basePath)
+    ? parsedRedirectUrl
+    : null
+}
+
 async function createRedirectRenderResult(
   req: BaseNextRequest,
   res: BaseNextResponse,
   originalHost: Host,
   redirectUrl: string,
+  redirectType: RedirectType,
   basePath: string,
-  staticGenerationStore: StaticGenerationStore
+  workStore: WorkStore
 ) {
-  res.setHeader('x-action-redirect', redirectUrl)
+  res.setHeader('x-action-redirect', `${redirectUrl};${redirectType}`)
 
   // If we're redirecting to another route of this Next.js application, we'll
   // try to stream the response from the other worker path. When that works,
   // we can save an extra roundtrip and avoid a full page reload.
-  // When the redirect URL starts with a `/`, or to the same host as application,
-  // we treat it as an app-relative redirect.
-  const parsedRedirectUrl = new URL(redirectUrl, 'http://n')
-  const isAppRelativeRedirect =
-    redirectUrl.startsWith('/') ||
-    (originalHost && originalHost.value === parsedRedirectUrl.host)
+  // When the redirect URL starts with a `/` or is to the same host, under the
+  // `basePath` we treat it as an app-relative redirect;
+  const appRelativeRedirectUrl = getAppRelativeRedirectUrl(
+    basePath,
+    originalHost,
+    redirectUrl
+  )
 
-  if (isAppRelativeRedirect) {
+  if (appRelativeRedirectUrl) {
     if (!originalHost) {
       throw new Error(
         'Invariant: Missing `host` header from a forwarded Server Actions request.'
@@ -267,8 +311,7 @@ async function createRedirectRenderResult(
     const forwardedHeaders = getForwardedHeaders(req, res)
     forwardedHeaders.set(RSC_HEADER, '1')
 
-    const proto =
-      staticGenerationStore.incrementalCache?.requestProtocol || 'https'
+    const proto = workStore.incrementalCache?.requestProtocol || 'https'
 
     // For standalone or the serverful mode, use the internal origin directly
     // other than the host headers from the request.
@@ -276,23 +319,26 @@ async function createRedirectRenderResult(
       process.env.__NEXT_PRIVATE_ORIGIN || `${proto}://${originalHost.value}`
 
     const fetchUrl = new URL(
-      `${origin}${basePath}${parsedRedirectUrl.pathname}${parsedRedirectUrl.search}`
+      `${origin}${appRelativeRedirectUrl.pathname}${appRelativeRedirectUrl.search}`
     )
 
-    if (staticGenerationStore.revalidatedTags) {
+    if (workStore.revalidatedTags) {
       forwardedHeaders.set(
         NEXT_CACHE_REVALIDATED_TAGS_HEADER,
-        staticGenerationStore.revalidatedTags.join(',')
+        workStore.revalidatedTags.join(',')
       )
       forwardedHeaders.set(
         NEXT_CACHE_REVALIDATE_TAG_TOKEN_HEADER,
-        staticGenerationStore.incrementalCache?.prerenderManifest?.preview
-          ?.previewModeId || ''
+        workStore.incrementalCache?.prerenderManifest?.preview?.previewModeId ||
+          ''
       )
     }
 
     // Ensures that when the path was revalidated we don't return a partial response on redirects
-    forwardedHeaders.delete('next-router-state-tree')
+    forwardedHeaders.delete(NEXT_ROUTER_STATE_TREE_HEADER)
+    // When an action follows a redirect, it's no longer handling an action: it's just a normal RSC request
+    // to the requested URL. We should remove the `next-action` header so that it's not treated as an action
+    forwardedHeaders.delete(ACTION_HEADER)
 
     try {
       const response = await fetch(fetchUrl, {
@@ -304,7 +350,11 @@ async function createRedirectRenderResult(
         },
       })
 
-      if (response.headers.get('content-type') === RSC_CONTENT_TYPE_HEADER) {
+      if (
+        response.headers
+          .get('content-type')
+          ?.startsWith(RSC_CONTENT_TYPE_HEADER)
+      ) {
         // copy the headers from the redirect response to the response we're sending
         for (const [key, value] of response.headers) {
           if (!actionsForbiddenHeaders.includes(key)) {
@@ -349,14 +399,51 @@ function limitUntrustedHeaderValueForLogs(value: string) {
   return value.length > 100 ? value.slice(0, 100) + '...' : value
 }
 
+export function parseHostHeader(
+  headers: IncomingHttpHeaders,
+  originDomain?: string
+) {
+  const forwardedHostHeader = headers['x-forwarded-host']
+  const forwardedHostHeaderValue =
+    forwardedHostHeader && Array.isArray(forwardedHostHeader)
+      ? forwardedHostHeader[0]
+      : forwardedHostHeader?.split(',')?.[0]?.trim()
+  const hostHeader = headers['host']
+
+  if (originDomain) {
+    return forwardedHostHeaderValue === originDomain
+      ? {
+          type: HostType.XForwardedHost,
+          value: forwardedHostHeaderValue,
+        }
+      : hostHeader === originDomain
+        ? {
+            type: HostType.Host,
+            value: hostHeader,
+          }
+        : undefined
+  }
+
+  return forwardedHostHeaderValue
+    ? {
+        type: HostType.XForwardedHost,
+        value: forwardedHostHeaderValue,
+      }
+    : hostHeader
+      ? {
+          type: HostType.Host,
+          value: hostHeader,
+        }
+      : undefined
+}
+
 type ServerModuleMap = Record<
   string,
-  | {
-      id: string
-      chunks: string[]
-      name: string
-    }
-  | undefined
+  {
+    id: string
+    chunks: string[]
+    name: string
+  }
 >
 
 type ServerActionsConfig = {
@@ -370,7 +457,7 @@ export async function handleAction({
   ComponentMod,
   serverModuleMap,
   generateFlight,
-  staticGenerationStore,
+  workStore,
   requestStore,
   serverActions,
   ctx,
@@ -380,7 +467,7 @@ export async function handleAction({
   ComponentMod: AppPageModule
   serverModuleMap: ServerModuleMap
   generateFlight: GenerateFlight
-  staticGenerationStore: StaticGenerationStore
+  workStore: WorkStore
   requestStore: RequestStore
   serverActions?: ServerActionsConfig
   ctx: AppRenderContext
@@ -411,35 +498,34 @@ export async function handleAction({
     return
   }
 
-  if (staticGenerationStore.isStaticGeneration) {
+  if (workStore.isStaticGeneration) {
     throw new Error(
       "Invariant: server actions can't be handled during static rendering"
     )
   }
 
+  let temporaryReferences: TemporaryReferenceSet | undefined
+
+  const finalizeAndGenerateFlight: GenerateFlight = (...args) => {
+    // When we switch to the render phase, cookies() will return
+    // `workUnitStore.cookies` instead of `workUnitStore.userspaceMutableCookies`.
+    // We want the render to see any cookie writes that we performed during the action,
+    // so we need to update the immutable cookies to reflect the changes.
+    synchronizeMutableCookies(requestStore)
+    requestStore.phase = 'render'
+    return generateFlight(...args)
+  }
+
+  requestStore.phase = 'action'
+
   // When running actions the default is no-store, you can still `cache: 'force-cache'`
-  staticGenerationStore.fetchCache = 'default-no-store'
+  workStore.fetchCache = 'default-no-store'
 
   const originDomain =
     typeof req.headers['origin'] === 'string'
       ? new URL(req.headers['origin']).host
       : undefined
-
-  const forwardedHostHeader = req.headers['x-forwarded-host'] as
-    | string
-    | undefined
-  const hostHeader = req.headers['host']
-  const host: Host = forwardedHostHeader
-    ? {
-        type: HostType.XForwardedHost,
-        value: forwardedHostHeader,
-      }
-    : hostHeader
-      ? {
-          type: HostType.Host,
-          value: hostHeader,
-        }
-      : undefined
+  const host = parseHostHeader(req.headers)
 
   let warning: string | undefined = undefined
 
@@ -484,10 +570,11 @@ export async function handleAction({
       if (isFetchAction) {
         res.statusCode = 500
         await Promise.all([
-          staticGenerationStore.incrementalCache?.revalidateTag(
-            staticGenerationStore.revalidatedTags || []
+          workStore.incrementalCache?.revalidateTag(
+            workStore.revalidatedTags || []
           ),
-          ...Object.values(staticGenerationStore.pendingRevalidates || {}),
+          ...Object.values(workStore.pendingRevalidates || {}),
+          ...(workStore.pendingRevalidateWrites || []),
         ])
 
         const promise = Promise.reject(error)
@@ -503,10 +590,11 @@ export async function handleAction({
 
         return {
           type: 'done',
-          result: await generateFlight(ctx, {
+          result: await finalizeAndGenerateFlight(req, ctx, requestStore, {
             actionResult: promise,
             // if the page was not revalidated, we can skip the rendering the flight tree
-            skipFlight: !staticGenerationStore.pathWasRevalidated,
+            skipFlight: !workStore.pathWasRevalidated,
+            temporaryReferences,
           }),
         }
       }
@@ -520,7 +608,8 @@ export async function handleAction({
     'Cache-Control',
     'no-cache, no-store, max-age=0, must-revalidate'
   )
-  let bound = []
+
+  let boundActionArguments: unknown[] = []
 
   const { actionAsyncStorage } = ComponentMod
 
@@ -547,7 +636,7 @@ export async function handleAction({
           host,
           forwardedWorker,
           ctx.renderOpts.basePath,
-          staticGenerationStore
+          workStore
         ),
       }
     }
@@ -561,26 +650,49 @@ export async function handleAction({
         process.env.NEXT_RUNTIME === 'edge' &&
         isWebNextRequest(req)
       ) {
-        // Use react-server-dom-webpack/server.edge
-        const { decodeReply, decodeAction, decodeFormState } = ComponentMod
         if (!req.body) {
           throw new Error('invariant: Missing request body.')
         }
 
         // TODO: add body limit
 
+        // Use react-server-dom-webpack/server.edge
+        const {
+          createTemporaryReferenceSet,
+          decodeReply,
+          decodeAction,
+          decodeFormState,
+        } = ComponentMod
+
+        temporaryReferences = createTemporaryReferenceSet()
+
         if (isMultipartAction) {
           // TODO-APP: Add streaming support
           const formData = await req.request.formData()
           if (isFetchAction) {
-            bound = await decodeReply(formData, serverModuleMap)
+            boundActionArguments = await decodeReply(
+              formData,
+              serverModuleMap,
+              { temporaryReferences }
+            )
           } else {
             const action = await decodeAction(formData, serverModuleMap)
             if (typeof action === 'function') {
               // Only warn if it's a server action, otherwise skip for other post requests
               warnBadServerActionRequest()
-              const actionReturnedState = await action()
-              formState = decodeFormState(actionReturnedState, formData)
+
+              const actionReturnedState = await workUnitAsyncStorage.run(
+                requestStore,
+                action
+              )
+
+              formState = await decodeFormState(
+                actionReturnedState,
+                formData,
+                serverModuleMap
+              )
+
+              requestStore.phase = 'render'
             }
 
             // Skip the fetch path
@@ -612,9 +724,17 @@ export async function handleAction({
 
           if (isURLEncodedAction) {
             const formData = formDataFromSearchQueryString(actionData)
-            bound = await decodeReply(formData, serverModuleMap)
+            boundActionArguments = await decodeReply(
+              formData,
+              serverModuleMap,
+              { temporaryReferences }
+            )
           } else {
-            bound = await decodeReply(actionData, serverModuleMap)
+            boundActionArguments = await decodeReply(
+              actionData,
+              serverModuleMap,
+              { temporaryReferences }
+            )
           }
         }
       } else if (
@@ -625,11 +745,16 @@ export async function handleAction({
       ) {
         // Use react-server-dom-webpack/server.node which supports streaming
         const {
+          createTemporaryReferenceSet,
           decodeReply,
           decodeReplyFromBusboy,
           decodeAction,
           decodeFormState,
-        } = require(`./react-server.node`)
+        } = require(
+          `./react-server.node`
+        ) as typeof import('./react-server.node')
+
+        temporaryReferences = createTemporaryReferenceSet()
 
         const { Transform } =
           require('node:stream') as typeof import('node:stream')
@@ -670,13 +795,18 @@ export async function handleAction({
         if (isMultipartAction) {
           if (isFetchAction) {
             const busboy = (require('busboy') as typeof import('busboy'))({
+              defParamCharset: 'utf8',
               headers: req.headers,
               limits: { fieldSize: bodySizeLimitBytes },
             })
 
             body.pipe(busboy)
 
-            bound = await decodeReplyFromBusboy(busboy, serverModuleMap)
+            boundActionArguments = await decodeReplyFromBusboy(
+              busboy,
+              serverModuleMap,
+              { temporaryReferences }
+            )
           } else {
             // React doesn't yet publish a busboy version of decodeAction
             // so we polyfill the parsing of FormData.
@@ -704,8 +834,19 @@ export async function handleAction({
             if (typeof action === 'function') {
               // Only warn if it's a server action, otherwise skip for other post requests
               warnBadServerActionRequest()
-              const actionReturnedState = await action()
-              formState = await decodeFormState(actionReturnedState, formData)
+
+              const actionReturnedState = await workUnitAsyncStorage.run(
+                requestStore,
+                action
+              )
+
+              formState = await decodeFormState(
+                actionReturnedState,
+                formData,
+                serverModuleMap
+              )
+
+              requestStore.phase = 'render'
             }
 
             // Skip the fetch path
@@ -732,9 +873,17 @@ export async function handleAction({
 
           if (isURLEncodedAction) {
             const formData = formDataFromSearchQueryString(actionData)
-            bound = await decodeReply(formData, serverModuleMap)
+            boundActionArguments = await decodeReply(
+              formData,
+              serverModuleMap,
+              { temporaryReferences }
+            )
           } else {
-            bound = await decodeReply(actionData, serverModuleMap)
+            boundActionArguments = await decodeReply(
+              actionData,
+              serverModuleMap,
+              { temporaryReferences }
+            )
           }
         }
       } else {
@@ -772,20 +921,22 @@ export async function handleAction({
         actionId!
       ]
 
-      const returnVal = await actionHandler.apply(null, bound)
+      const returnVal = await workUnitAsyncStorage.run(requestStore, () =>
+        actionHandler.apply(null, boundActionArguments)
+      )
 
       // For form actions, we need to continue rendering the page.
       if (isFetchAction) {
         await addRevalidationHeader(res, {
-          staticGenerationStore,
+          workStore,
           requestStore,
         })
 
-        actionResult = await generateFlight(ctx, {
+        actionResult = await finalizeAndGenerateFlight(req, ctx, requestStore, {
           actionResult: Promise.resolve(returnVal),
           // if the page was not revalidated, or if the action was forwarded from another worker, we can skip the rendering the flight tree
-          skipFlight:
-            !staticGenerationStore.pathWasRevalidated || actionWasForwarded,
+          skipFlight: !workStore.pathWasRevalidated || actionWasForwarded,
+          temporaryReferences,
         })
       }
     })
@@ -798,16 +949,16 @@ export async function handleAction({
   } catch (err) {
     if (isRedirectError(err)) {
       const redirectUrl = getURLFromRedirectError(err)
-      const statusCode = getRedirectStatusCodeFromError(err)
+      const redirectType = getRedirectTypeFromError(err)
 
       await addRevalidationHeader(res, {
-        staticGenerationStore,
+        workStore,
         requestStore,
       })
 
       // if it's a fetch action, we'll set the status code for logging/debugging purposes
       // but we won't set a Location header, as the redirect will be handled by the client router
-      res.statusCode = statusCode
+      res.statusCode = RedirectStatusCode.SeeOther
 
       if (isFetchAction) {
         return {
@@ -817,20 +968,18 @@ export async function handleAction({
             res,
             host,
             redirectUrl,
+            redirectType,
             ctx.renderOpts.basePath,
-            staticGenerationStore
+            workStore
           ),
         }
       }
 
-      if (err.mutableCookies) {
-        const headers = new Headers()
-
-        // If there were mutable cookies set, we need to set them on the
-        // response.
-        if (appendMutableCookies(headers, err.mutableCookies)) {
-          res.setHeader('set-cookie', Array.from(headers.values()))
-        }
+      // If there were mutable cookies set, we need to set them on the
+      // response.
+      const headers = new Headers()
+      if (appendMutableCookies(headers, requestStore.mutableCookies)) {
+        res.setHeader('set-cookie', Array.from(headers.values()))
       }
 
       res.setHeader('Location', redirectUrl)
@@ -838,11 +987,11 @@ export async function handleAction({
         type: 'done',
         result: RenderResult.fromStatic(''),
       }
-    } else if (isNotFoundError(err)) {
-      res.statusCode = 404
+    } else if (isHTTPAccessFallbackError(err)) {
+      res.statusCode = getAccessFallbackHTTPStatus(err)
 
       await addRevalidationHeader(res, {
-        staticGenerationStore,
+        workStore,
         requestStore,
       })
 
@@ -859,10 +1008,10 @@ export async function handleAction({
         }
         return {
           type: 'done',
-          result: await generateFlight(ctx, {
+          result: await finalizeAndGenerateFlight(req, ctx, requestStore, {
             skipFlight: false,
             actionResult: promise,
-            asNotFound: true,
+            temporaryReferences,
           }),
         }
       }
@@ -874,10 +1023,11 @@ export async function handleAction({
     if (isFetchAction) {
       res.statusCode = 500
       await Promise.all([
-        staticGenerationStore.incrementalCache?.revalidateTag(
-          staticGenerationStore.revalidatedTags || []
+        workStore.incrementalCache?.revalidateTag(
+          workStore.revalidatedTags || []
         ),
-        ...Object.values(staticGenerationStore.pendingRevalidates || {}),
+        ...Object.values(workStore.pendingRevalidates || {}),
+        ...(workStore.pendingRevalidateWrites || []),
       ])
       const promise = Promise.reject(err)
       try {
@@ -890,13 +1040,14 @@ export async function handleAction({
         // swallow error, it's gonna be handled on the client
       }
 
+      requestStore.phase = 'render'
       return {
         type: 'done',
-        result: await generateFlight(ctx, {
+        result: await generateFlight(req, ctx, requestStore, {
           actionResult: promise,
           // if the page was not revalidated, or if the action was forwarded from another worker, we can skip the rendering the flight tree
-          skipFlight:
-            !staticGenerationStore.pathWasRevalidated || actionWasForwarded,
+          skipFlight: !workStore.pathWasRevalidated || actionWasForwarded,
+          temporaryReferences,
         }),
       }
     }

@@ -28,15 +28,24 @@ describe('app dir - metadata missing metadataBase', () => {
     })
   }
 
-  it('should fallback to localhost if metadataBase is missing for absolute urls resolving', async () => {
+  it('should show warning in vercel deployment output in default build output mode', async () => {
     const logStartPosition = next.cliOutput.length
     await next.fetch('/og-image-convention')
     const output = getCliOutput(logStartPosition)
+
+    if (isNextDev) {
+      expect(output).not.toInclude(METADATA_BASE_WARN_STRING)
+    } else {
+      expect(output).toInclude(METADATA_BASE_WARN_STRING)
+    }
+  })
+
+  it('should warn metadataBase is missing and a relative URL is used', async () => {
+    const logStartPosition = next.cliOutput.length
+    await next.fetch('/relative-url-og')
+    const output = getCliOutput(logStartPosition)
+
     expect(output).toInclude(METADATA_BASE_WARN_STRING)
-    expect(output).toMatch(/using "http:\/\/localhost:\d+/)
-    expect(output).toInclude(
-      '. See https://nextjs.org/docs/app/api-reference/functions/generate-metadata#metadatabase'
-    )
   })
 
   it('should warn for unsupported metadata properties', async () => {

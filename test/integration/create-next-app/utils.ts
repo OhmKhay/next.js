@@ -14,25 +14,27 @@ export const DEFAULT_FILES = [
   'node_modules/next',
 ]
 
-export const run = (
+export const run = async (
   args: string[],
+  nextJSVersion: string,
   options:
     | execa.Options
     | {
         reject?: boolean
         env?: Record<string, string>
       }
-) =>
-  execa('node', [CNA_PATH].concat(args), {
+) => {
+  return execa('node', [CNA_PATH].concat(args), {
     // tests with options.reject false are expected to exit(1) so don't inherit
     stdio: options.reject === false ? 'pipe' : 'inherit',
     ...options,
     env: {
       ...process.env,
       ...options.env,
-      NEXT_PRIVATE_TEST_VERSION: 'canary',
+      NEXT_PRIVATE_TEST_VERSION: nextJSVersion,
     },
   })
+}
 
 export const command = (cmd: string, args: string[]) =>
   execa(cmd, args, {
@@ -44,11 +46,13 @@ export async function tryNextDev({
   cwd,
   projectName,
   isApp = true,
+  isApi = false,
   isEmpty = false,
 }: {
   cwd: string
   projectName: string
   isApp?: boolean
+  isApi?: boolean
   isEmpty?: boolean
 }) {
   const dir = join(cwd, projectName)
@@ -59,7 +63,7 @@ export async function tryNextDev({
 
   try {
     const res = await fetchViaHTTP(port, '/')
-    if (isEmpty) {
+    if (isEmpty || isApi) {
       expect(await res.text()).toContain('Hello world!')
     } else {
       expect(await res.text()).toContain('Get started by editing')
@@ -84,6 +88,5 @@ export {
   shouldBeTemplateProject,
   shouldBeJavascriptProject,
   shouldBeTypescriptProject,
-  spawnExitPromise,
 } from './lib/utils'
 export { useTempDir } from '../../lib/use-temp-dir'

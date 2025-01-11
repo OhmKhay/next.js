@@ -19,7 +19,6 @@ describe('clearCacheNodeDataForSegmentPath', () => {
       head: null,
       prefetchHead: null,
       parallelRoutes: new Map(),
-      lazyDataResolved: false,
       loading: null,
     }
     const existingCache: CacheNode = {
@@ -28,7 +27,6 @@ describe('clearCacheNodeDataForSegmentPath', () => {
       prefetchRsc: null,
       head: null,
       prefetchHead: null,
-      lazyDataResolved: false,
       loading: null,
       parallelRoutes: new Map([
         [
@@ -40,7 +38,6 @@ describe('clearCacheNodeDataForSegmentPath', () => {
                 lazyData: null,
                 rsc: <>Linking</>,
                 prefetchRsc: null,
-                lazyDataResolved: false,
                 head: null,
                 prefetchHead: null,
                 loading: null,
@@ -57,7 +54,6 @@ describe('clearCacheNodeDataForSegmentPath', () => {
                           head: null,
                           prefetchHead: null,
                           parallelRoutes: new Map(),
-                          lazyDataResolved: false,
                           loading: null,
                         },
                       ],
@@ -74,56 +70,52 @@ describe('clearCacheNodeDataForSegmentPath', () => {
     clearCacheNodeDataForSegmentPath(cache, existingCache, flightSegmentPath)
 
     expect(cache).toMatchInlineSnapshot(`
-      {
-        "head": null,
-        "lazyData": null,
-        "lazyDataResolved": false,
-        "loading": null,
-        "parallelRoutes": Map {
-          "children" => Map {
-            "linking" => {
-              "head": null,
-              "lazyData": null,
-              "lazyDataResolved": false,
-              "loading": null,
-              "parallelRoutes": Map {
-                "children" => Map {
-                  "" => {
-                    "head": null,
-                    "lazyData": null,
-                    "lazyDataResolved": false,
-                    "loading": null,
-                    "parallelRoutes": Map {},
-                    "prefetchHead": null,
-                    "prefetchRsc": null,
-                    "rsc": <React.Fragment>
-                      Page
-                    </React.Fragment>,
-                  },
-                },
-              },
-              "prefetchHead": null,
-              "prefetchRsc": null,
-              "rsc": <React.Fragment>
-                Linking
-              </React.Fragment>,
-            },
-            "dashboard" => {
-              "head": null,
-              "lazyData": null,
-              "lazyDataResolved": false,
-              "loading": null,
-              "parallelRoutes": Map {},
-              "prefetchHead": null,
-              "prefetchRsc": null,
-              "rsc": null,
-            },
-          },
-        },
-        "prefetchHead": null,
-        "prefetchRsc": null,
-        "rsc": null,
-      }
+     {
+       "head": null,
+       "lazyData": null,
+       "loading": null,
+       "parallelRoutes": Map {
+         "children" => Map {
+           "linking" => {
+             "head": null,
+             "lazyData": null,
+             "loading": null,
+             "parallelRoutes": Map {
+               "children" => Map {
+                 "" => {
+                   "head": null,
+                   "lazyData": null,
+                   "loading": null,
+                   "parallelRoutes": Map {},
+                   "prefetchHead": null,
+                   "prefetchRsc": null,
+                   "rsc": <React.Fragment>
+                     Page
+                   </React.Fragment>,
+                 },
+               },
+             },
+             "prefetchHead": null,
+             "prefetchRsc": null,
+             "rsc": <React.Fragment>
+               Linking
+             </React.Fragment>,
+           },
+           "dashboard" => {
+             "head": null,
+             "lazyData": null,
+             "loading": null,
+             "parallelRoutes": Map {},
+             "prefetchHead": null,
+             "prefetchRsc": null,
+             "rsc": null,
+           },
+         },
+       },
+       "prefetchHead": null,
+       "prefetchRsc": null,
+       "rsc": null,
+     }
     `)
   })
 })
