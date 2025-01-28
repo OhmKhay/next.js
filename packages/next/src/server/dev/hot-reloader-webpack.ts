@@ -692,6 +692,7 @@ export default class HotReloaderWebpack implements NextJsHotReloaderInterface {
       config: this.config,
       buildId: this.buildId,
       encryptionKey: this.encryptionKey,
+      appDir: this.appDir,
       pagesDir: this.pagesDir,
       rewrites: {
         beforeFiles: [],
@@ -1523,21 +1524,6 @@ export default class HotReloaderWebpack implements NextJsHotReloaderInterface {
     if (outputPath) {
       getInvalidator(outputPath)?.invalidate()
     }
-  }
-
-  public async stop(): Promise<void> {
-    await new Promise((resolve, reject) => {
-      this.watcher.close((err: any) => (err ? reject(err) : resolve(true)))
-    })
-
-    if (this.fallbackWatcher) {
-      await new Promise((resolve, reject) => {
-        this.fallbackWatcher.close((err: any) =>
-          err ? reject(err) : resolve(true)
-        )
-      })
-    }
-    this.multiCompiler = undefined
   }
 
   public async getCompilationErrors(page: string) {

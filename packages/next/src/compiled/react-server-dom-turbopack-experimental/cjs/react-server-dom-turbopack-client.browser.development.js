@@ -1842,7 +1842,8 @@
         response.reason.close("" === row ? '"$undefined"' : row);
     }
     function resolveErrorDev(response, errorInfo) {
-      var env = errorInfo.env;
+      var name = errorInfo.name,
+        env = errorInfo.env;
       errorInfo = buildFakeCallStack(
         response,
         errorInfo.stack,
@@ -1855,6 +1856,7 @@
       );
       response = getRootTask(response, env);
       response = null != response ? response.run(errorInfo) : errorInfo();
+      response.name = name;
       response.environmentName = env;
       return response;
     }
@@ -2894,10 +2896,10 @@
       return hook.checkDCE ? !0 : !1;
     })({
       bundleType: 1,
-      version: "19.1.0-experimental-f0edf41e-20250115",
+      version: "19.1.0-experimental-9eabb373-20250124",
       rendererPackageName: "react-server-dom-turbopack",
       currentDispatcherRef: ReactSharedInternals,
-      reconcilerVersion: "19.1.0-experimental-f0edf41e-20250115",
+      reconcilerVersion: "19.1.0-experimental-9eabb373-20250124",
       getCurrentComponentInfo: function () {
         return currentOwnerInDEV;
       }

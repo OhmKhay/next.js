@@ -9,9 +9,12 @@ edition = "2021"
 bench = false
 
 [features]
-default = []
 tokio_tracing = ["tokio/tracing"]
 hanging_detection = []
+
+# TODO(bgw): This feature is here to unblock turning on local tasks by default. It's only turned on
+# in unit tests. This will be removed very soon.
+non_operation_vc_strongly_consistent = []
 
 [lints]
 workspace = true

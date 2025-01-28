@@ -148,7 +148,6 @@ import {
   loadBindings,
   lockfilePatchPromise,
   teardownTraceSubscriber,
-  teardownHeapProfiler,
   createDefineEnv,
 } from './swc'
 import { getNamedRouteRegex } from '../shared/lib/router/utils/route-regex'
@@ -187,18 +186,7 @@ import {
 import { getStartServerInfo, logStartInfo } from '../server/lib/app-info-log'
 import type { NextEnabledDirectories } from '../server/base-server'
 import { hasCustomExportOutput } from '../export/utils'
-import {
-  getTurbopackJsConfig,
-  handleEntrypoints,
-  type EntryIssuesMap,
-  handleRouteType,
-  handlePagesErrorRoute,
-  formatIssue,
-  isRelevantWarning,
-  isPersistentCachingEnabled,
-} from '../server/dev/turbopack-utils'
-import { TurbopackManifestLoader } from '../server/dev/turbopack/manifest-loader'
-import type { Entrypoints } from '../server/dev/turbopack/types'
+import { TurbopackManifestLoader } from '../shared/lib/turbopack/manifest-loader'
 import { buildCustomRoute } from '../lib/build-custom-route'
 import { createProgress } from './progress'
 import { traceMemoryUsage } from '../lib/memory/trace'
@@ -218,6 +206,20 @@ import {
 } from '../server/lib/utils'
 import { InvariantError } from '../shared/lib/invariant-error'
 import { HTML_LIMITED_BOT_UA_RE_STRING } from '../shared/lib/router/utils/is-bot'
+import type { UseCacheTrackerKey } from './webpack/plugins/telemetry-plugin/use-cache-tracker-utils'
+import {
+  handleEntrypoints,
+  handlePagesErrorRoute,
+  handleRouteType,
+} from './handle-entrypoints'
+import type { Entrypoints } from './swc/types'
+import {
+  formatIssue,
+  getTurbopackJsConfig,
+  isPersistentCachingEnabled,
+  isRelevantWarning,
+  type EntryIssuesMap,
+} from '../shared/lib/turbopack/utils'
 
 type Fallback = null | boolean | string
 
@@ -430,7 +432,9 @@ export type RoutesManifest = {
 }
 
 function pageToRoute(page: string) {
-  const routeRegex = getNamedRouteRegex(page, true)
+  const routeRegex = getNamedRouteRegex(page, {
+    prefixRouteKeys: true,
+  })
   return {
     page,
     regex: normalizeRouteRegex(routeRegex.re.source),
@@ -1487,7 +1491,6 @@ export default async function build(
           currentEntrypoints,
           currentEntryIssues,
           manifestLoader,
-          devRewrites: undefined,
           productionRewrites: customRoutes.rewrites,
           logErrors: false,
         })
@@ -1528,15 +1531,11 @@ export default async function build(
           for (const [page, route] of currentEntrypoints.page) {
             enqueue(() =>
               handleRouteType({
-                dev,
                 page,
-                pathname: page,
                 route,
-
                 currentEntryIssues,
                 entrypoints: currentEntrypoints,
                 manifestLoader,
-                devRewrites: undefined,
                 productionRewrites: customRoutes.rewrites,
                 logErrors: false,
               })
@@ -1548,13 +1547,10 @@ export default async function build(
           enqueue(() =>
             handleRouteType({
               page,
-              dev: false,
-              pathname: normalizeAppPath(page),
               route,
               currentEntryIssues,
               entrypoints: currentEntrypoints,
               manifestLoader,
-              devRewrites: undefined,
               productionRewrites: customRoutes.rewrites,
               logErrors: false,
             })
@@ -1563,11 +1559,9 @@ export default async function build(
 
         enqueue(() =>
           handlePagesErrorRoute({
-            dev: false,
             currentEntryIssues,
             entrypoints: currentEntrypoints,
             manifestLoader,
-            devRewrites: undefined,
             productionRewrites: customRoutes.rewrites,
             logErrors: false,
           })
@@ -2463,7 +2457,11 @@ export default async function build(
           path.join(SERVER_DIRECTORY, `${INSTRUMENTATION_HOOK_FILENAME}.js`)
         )
         // If there's edge routes, append the edge instrumentation hook
-        if (edgeRuntimeAppCount || edgeRuntimePagesCount) {
+        // Turbopack generates this chunk with a hashed name and references it in middleware-manifest.
+        if (
+          !process.env.TURBOPACK &&
+          (edgeRuntimeAppCount || edgeRuntimePagesCount)
+        ) {
           instrumentationHookEntryFiles.push(
             path.join(
               SERVER_DIRECTORY,
@@ -2674,6 +2672,10 @@ export default async function build(
       }
 
       const features: EventBuildFeatureUsage[] = [
+        {
+          featureName: 'experimental/dynamicIO',
+          invocationCount: config.experimental.dynamicIO ? 1 : 0,
+        },
         {
           featureName: 'experimental/optimizeCss',
           invocationCount: config.experimental.optimizeCss ? 1 : 0,
@@ -3217,7 +3219,9 @@ export default async function build(
                     : undefined,
                   experimentalBypassFor: bypassFor,
                   routeRegex: normalizeRouteRegex(
-                    getNamedRouteRegex(route.pathname, false).re.source
+                    getNamedRouteRegex(route.pathname, {
+                      prefixRouteKeys: false,
+                    }).re.source
                   ),
                   dataRoute,
                   fallback,
@@ -3231,22 +3235,21 @@ export default async function build(
                   dataRouteRegex: !dataRoute
                     ? null
                     : normalizeRouteRegex(
-                        getNamedRouteRegex(
-                          dataRoute.replace(/\.rsc$/, ''),
-                          false
-                        ).re.source.replace(/\(\?:\\\/\)\?\$$/, '\\.rsc$')
+                        getNamedRouteRegex(dataRoute, {
+                          prefixRouteKeys: false,
+                          includeSuffix: true,
+                          excludeOptionalTrailingSlash: true,
+                        }).re.source
                       ),
                   prefetchDataRoute,
                   prefetchDataRouteRegex: !prefetchDataRoute
                     ? undefined
                     : normalizeRouteRegex(
-                        getNamedRouteRegex(
-                          prefetchDataRoute.replace(/\.prefetch\.rsc$/, ''),
-                          false
-                        ).re.source.replace(
-                          /\(\?:\\\/\)\?\$$/,
-                          '\\.prefetch\\.rsc$'
-                        )
+                        getNamedRouteRegex(prefetchDataRoute, {
+                          prefixRouteKeys: false,
+                          includeSuffix: true,
+                          excludeOptionalTrailingSlash: true,
+                        }).re.source
                       ),
                   allowHeader: ALLOWED_HEADERS,
                 }
@@ -3631,6 +3634,18 @@ export default async function build(
             NextBuildContext.telemetryState.packagesUsedInServerSideProps
           )
         )
+        const useCacheTracker = NextBuildContext.telemetryState.useCacheTracker
+
+        for (const [key, value] of Object.entries(useCacheTracker)) {
+          telemetry.record(
+            eventBuildFeatureUsage([
+              {
+                featureName: key as UseCacheTrackerKey,
+                invocationCount: value,
+              },
+            ])
+          )
+        }
       }
 
       if (ssgPages.size > 0 || appDir) {
@@ -3644,7 +3659,9 @@ export default async function build(
 
           prerenderManifest.dynamicRoutes[tbdRoute] = {
             routeRegex: normalizeRouteRegex(
-              getNamedRouteRegex(tbdRoute, false).re.source
+              getNamedRouteRegex(tbdRoute, {
+                prefixRouteKeys: false,
+              }).re.source
             ),
             experimentalPPR: undefined,
             renderingMode: undefined,
@@ -3658,10 +3675,11 @@ export default async function build(
             fallbackSourceRoute: undefined,
             fallbackRootParams: undefined,
             dataRouteRegex: normalizeRouteRegex(
-              getNamedRouteRegex(
-                dataRoute.replace(/\.json$/, ''),
-                false
-              ).re.source.replace(/\(\?:\\\/\)\?\$$/, '\\.json$')
+              getNamedRouteRegex(dataRoute, {
+                prefixRouteKeys: true,
+                includeSuffix: true,
+                excludeOptionalTrailingSlash: true,
+              }).re.source
             ),
             // Pages does not have a prefetch data route.
             prefetchDataRoute: undefined,
@@ -3786,7 +3804,6 @@ export default async function build(
     // Ensure all traces are flushed before finishing the command
     await flushAllTraces()
     teardownTraceSubscriber()
-    teardownHeapProfiler()
 
     if (traceUploadUrl && loadedConfig) {
       uploadTrace({

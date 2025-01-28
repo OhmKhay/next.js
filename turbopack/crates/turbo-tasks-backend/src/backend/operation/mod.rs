@@ -372,7 +372,7 @@ pub trait TaskGuard: Debug {
     fn get_mut(&mut self, key: &CachedDataItemKey) -> Option<CachedDataItemValueRefMut<'_>>;
     fn get_mut_or_insert_with(
         &mut self,
-        key: &CachedDataItemKey,
+        key: CachedDataItemKey,
         insert: impl FnOnce() -> CachedDataItemValue,
     ) -> CachedDataItemValueRefMut<'_>;
     fn has_key(&self, key: &CachedDataItemKey) -> bool;
@@ -603,7 +603,7 @@ impl<B: BackingStorage> TaskGuard for TaskGuardImpl<'_, B> {
 
     fn get_mut_or_insert_with(
         &mut self,
-        key: &CachedDataItemKey,
+        key: CachedDataItemKey,
         insert: impl FnOnce() -> CachedDataItemValue,
     ) -> CachedDataItemValueRefMut<'_> {
         self.check_access(key.category());
@@ -612,7 +612,7 @@ impl<B: BackingStorage> TaskGuard for TaskGuardImpl<'_, B> {
 
     fn has_key(&self, key: &CachedDataItemKey) -> bool {
         self.check_access(key.category());
-        self.task.has_key(key)
+        self.task.contains_key(key)
     }
 
     fn count(&self, ty: CachedDataItemType) -> usize {
@@ -742,12 +742,13 @@ impl_operation!(UpdateOutput update_output::UpdateOutputOperation);
 impl_operation!(CleanupOldEdges cleanup_old_edges::CleanupOldEdgesOperation);
 impl_operation!(AggregationUpdate aggregation_update::AggregationUpdateQueue);
 
+#[cfg(feature = "trace_task_dirty")]
+pub use self::invalidate::TaskDirtyCause;
 pub use self::{
     aggregation_update::{
         get_aggregation_number, is_root_node, AggregatedDataUpdate, AggregationUpdateJob,
     },
     cleanup_old_edges::OutdatedEdge,
-    invalidate::TaskDirtyCause,
     update_cell::UpdateCellOperation,
     update_collectible::UpdateCollectibleOperation,
 };

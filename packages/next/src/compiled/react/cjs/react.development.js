@@ -956,6 +956,7 @@
         A: null,
         T: null,
         S: null,
+        V: null,
         actQueue: null,
         isBatchingLegacy: !1,
         didScheduleLegacyUpdate: !1,
@@ -1520,7 +1521,7 @@
     exports.useTransition = function () {
       return resolveDispatcher().useTransition();
     };
-    exports.version = "19.1.0-canary-f0edf41e-20250115";
+    exports.version = "19.1.0-canary-9eabb373-20250124";
     "undefined" !== typeof __REACT_DEVTOOLS_GLOBAL_HOOK__ &&
       "function" ===
         typeof __REACT_DEVTOOLS_GLOBAL_HOOK__.registerInternalModuleStop &&

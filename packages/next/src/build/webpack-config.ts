@@ -52,7 +52,7 @@ import { NextTypesPlugin } from './webpack/plugins/next-types-plugin'
 import type {
   Feature,
   SWC_TARGET_TRIPLE,
-} from './webpack/plugins/telemetry-plugin'
+} from './webpack/plugins/telemetry-plugin/telemetry-plugin'
 import type { Span } from '../trace'
 import type { MiddlewareMatcher } from './analysis/get-page-static-info'
 import loadJsConfig, {
@@ -304,13 +304,13 @@ export default async function getBaseWebpackConfig(
     dev?: boolean
     entrypoints: webpack.EntryObject
     isDevFallback?: boolean
-    pagesDir?: string
+    pagesDir: string | undefined
     reactProductionProfiling?: boolean
     rewrites: CustomRoutes['rewrites']
     originalRewrites: CustomRoutes['rewrites'] | undefined
     originalRedirects: CustomRoutes['redirects'] | undefined
     runWebpackSpan: Span
-    appDir?: string
+    appDir: string | undefined
     middlewareMatchers?: MiddlewareMatcher[]
     noMangling?: boolean
     jsConfig: any
@@ -1907,7 +1907,9 @@ export default async function getBaseWebpackConfig(
         new CssChunkingPlugin(config.experimental.cssChunking === 'strict'),
       !dev &&
         isClient &&
-        new (require('./webpack/plugins/telemetry-plugin').TelemetryPlugin)(
+        new (
+          require('./webpack/plugins/telemetry-plugin/telemetry-plugin') as typeof import('./webpack/plugins/telemetry-plugin/telemetry-plugin')
+        ).TelemetryPlugin(
           new Map(
             [
               ['swcLoader', useSWCLoader],
@@ -1937,6 +1939,11 @@ export default async function getBaseWebpackConfig(
             ].filter<[Feature, boolean]>(Boolean as any)
           )
         ),
+      !dev &&
+        isNodeServer &&
+        new (
+          require('./webpack/plugins/telemetry-plugin/telemetry-plugin') as typeof import('./webpack/plugins/telemetry-plugin/telemetry-plugin')
+        ).TelemetryPlugin(new Map()),
     ].filter(Boolean as any as ExcludesFalse),
   }
 

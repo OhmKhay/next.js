@@ -11,16 +11,15 @@ use next_core::{
     get_edge_resolve_options_context, get_next_package,
     next_app::{
         get_app_client_references_chunks, get_app_client_shared_chunk_group, get_app_page_entry,
-        get_app_route_entry, include_modules_module::IncludeModulesModule,
-        metadata::route::get_app_metadata_route_entry, AppEntry, AppPage,
+        get_app_route_entry, metadata::route::get_app_metadata_route_entry, AppEntry, AppPage,
     },
     next_client::{
         get_client_module_options_context, get_client_resolve_options_context,
         get_client_runtime_entries, ClientContextType, RuntimeEntries,
     },
     next_client_reference::{
-        find_server_entries, ClientReferenceGraphResult, NextEcmascriptClientReferenceTransition,
-        ServerEntries,
+        find_server_entries, ClientReferenceGraphResult, NextCssClientReferenceTransition,
+        NextEcmascriptClientReferenceTransition, ServerEntries,
     },
     next_config::NextConfig,
     next_dynamic::NextDynamicTransition,
@@ -56,8 +55,8 @@ use turbopack::{
 use turbopack_core::{
     asset::AssetContent,
     chunk::{
-        availability_info::AvailabilityInfo, ChunkingContext, ChunkingContextExt,
-        EntryChunkGroupResult, EvaluatableAsset, EvaluatableAssets,
+        availability_info::AvailabilityInfo, ChunkableModule, ChunkableModules, ChunkingContext,
+        ChunkingContextExt, EntryChunkGroupResult, EvaluatableAsset, EvaluatableAssets,
     },
     file_source::FileSource,
     ident::AssetIdent,
@@ -65,6 +64,7 @@ use turbopack_core::{
     module_graph::{ModuleGraph, SingleModuleGraph, VisitedModules},
     output::{OutputAsset, OutputAssets},
     raw_output::RawOutput,
+    reference_type::{CssReferenceSubType, ReferenceType},
     resolve::{origin::PlainResolveOrigin, parse::Request, pattern::Pattern},
     source::Source,
     virtual_output::VirtualOutputAsset,
@@ -81,9 +81,9 @@ use crate::{
         all_paths_in_root, all_server_paths, get_asset_paths_from_root, get_js_paths_from_root,
         get_wasm_paths_from_root, paths_to_bindings, wasm_paths_to_bindings,
     },
-    project::Project,
-    route::{AppPageRoute, Endpoint, Route, Routes, WrittenEndpoint},
-    server_actions::create_server_actions_manifest,
+    project::{ModuleGraphs, Project},
+    route::{AppPageRoute, Endpoint, EndpointOutput, EndpointOutputPaths, Route, Routes},
+    server_actions::{build_server_actions_loader, create_server_actions_manifest},
     webpack_stats::generate_webpack_stats,
 };
 
@@ -102,9 +102,25 @@ pub(crate) const ECMASCRIPT_CLIENT_TRANSITION_NAME: &str = "next-ecmascript-clie
 
 fn styles_rule_condition() -> RuleCondition {
     RuleCondition::any(vec![
-        RuleCondition::ResourcePathEndsWith(".css".into()),
-        RuleCondition::ResourcePathEndsWith(".scss".into()),
-        RuleCondition::ResourcePathEndsWith(".sass".into()),
+        RuleCondition::all(vec![
+            RuleCondition::ResourcePathEndsWith(".css".into()),
+            RuleCondition::not(RuleCondition::ResourcePathEndsWith(".module.css".into())),
+        ]),
+        RuleCondition::all(vec![
+            RuleCondition::ResourcePathEndsWith(".scss".into()),
+            RuleCondition::not(RuleCondition::ResourcePathEndsWith(".module.scss".into())),
+        ]),
+        RuleCondition::all(vec![
+            RuleCondition::ResourcePathEndsWith(".sass".into()),
+            RuleCondition::not(RuleCondition::ResourcePathEndsWith(".module.sass".into())),
+        ]),
+    ])
+}
+fn module_styles_rule_condition() -> RuleCondition {
+    RuleCondition::any(vec![
+        RuleCondition::ResourcePathEndsWith(".module.css".into()),
+        RuleCondition::ResourcePathEndsWith(".module.scss".into()),
+        RuleCondition::ResourcePathEndsWith(".module.sass".into()),
     ])
 }
 
@@ -307,65 +323,104 @@ impl AppProject {
     }
 
     #[turbo_tasks::function]
-    pub fn client_reference_transition(self: Vc<Self>) -> Vc<Box<dyn Transition>> {
+    pub fn ecmascript_client_reference_transition(self: Vc<Self>) -> Vc<Box<dyn Transition>> {
         Vc::upcast(NextEcmascriptClientReferenceTransition::new(
             Vc::upcast(self.client_transition()),
-            self.ssr_transition(),
+            Vc::upcast(self.ssr_transition()),
         ))
     }
 
     #[turbo_tasks::function]
-    pub fn edge_client_reference_transition(self: Vc<Self>) -> Vc<Box<dyn Transition>> {
+    pub fn edge_ecmascript_client_reference_transition(self: Vc<Self>) -> Vc<Box<dyn Transition>> {
         Vc::upcast(NextEcmascriptClientReferenceTransition::new(
             Vc::upcast(self.client_transition()),
-            self.edge_ssr_transition(),
+            Vc::upcast(self.edge_ssr_transition()),
         ))
+    }
+
+    #[turbo_tasks::function]
+    pub fn css_client_reference_transition(self: Vc<Self>) -> Vc<Box<dyn Transition>> {
+        Vc::upcast(NextCssClientReferenceTransition::new(Vc::upcast(
+            self.client_transition(),
+        )))
+    }
+
+    #[turbo_tasks::function]
+    async fn get_rsc_transitions(
+        self: Vc<Self>,
+        ecmascript_client_reference_transition: Vc<Box<dyn Transition>>,
+        ssr_transition: Vc<Box<dyn Transition>>,
+        shared_transition: Vc<Box<dyn Transition>>,
+    ) -> Result<Vc<TransitionOptions>> {
+        Ok(TransitionOptions {
+            named_transitions: [
+                (
+                    ECMASCRIPT_CLIENT_TRANSITION_NAME.into(),
+                    ecmascript_client_reference_transition.to_resolved().await?,
+                ),
+                (
+                    "next-dynamic".into(),
+                    ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
+                ),
+                (
+                    "next-dynamic-client".into(),
+                    ResolvedVc::upcast(
+                        NextDynamicTransition::new_client(Vc::upcast(self.client_transition()))
+                            .to_resolved()
+                            .await?,
+                    ),
+                ),
+                ("next-ssr".into(), ssr_transition.to_resolved().await?),
+                ("next-shared".into(), shared_transition.to_resolved().await?),
+                (
+                    "next-server-utility".into(),
+                    ResolvedVc::upcast(NextServerUtilityTransition::new().to_resolved().await?),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            transition_rules: vec![
+                // Mark as client reference (and exclude from RSC chunking) the edge from the
+                // CSS Module to the actual CSS
+                TransitionRule::new_internal(
+                    RuleCondition::all(vec![
+                        RuleCondition::ReferenceType(ReferenceType::Css(
+                            CssReferenceSubType::Internal,
+                        )),
+                        module_styles_rule_condition(),
+                    ]),
+                    ResolvedVc::upcast(self.css_client_reference_transition().to_resolved().await?),
+                ),
+                // Don't wrap in marker module but change context, this is used to determine
+                // the list of CSS module classes.
+                TransitionRule::new(
+                    RuleCondition::all(vec![
+                        RuleCondition::ReferenceType(ReferenceType::Css(
+                            CssReferenceSubType::Analyze,
+                        )),
+                        module_styles_rule_condition(),
+                    ]),
+                    ResolvedVc::upcast(self.client_transition().to_resolved().await?),
+                ),
+                // Mark as client reference all regular CSS imports
+                TransitionRule::new(
+                    styles_rule_condition(),
+                    ResolvedVc::upcast(self.css_client_reference_transition().to_resolved().await?),
+                ),
+            ],
+            ..Default::default()
+        }
+        .cell())
     }
 
     #[turbo_tasks::function]
     async fn rsc_module_context(self: Vc<Self>) -> Result<Vc<ModuleAssetContext>> {
-        let transitions = [
-            (
-                ECMASCRIPT_CLIENT_TRANSITION_NAME.into(),
-                self.client_reference_transition().to_resolved().await?,
-            ),
-            (
-                "next-dynamic".into(),
-                ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
-            ),
-            (
-                "next-dynamic-client".into(),
-                ResolvedVc::upcast(
-                    NextDynamicTransition::new_client(Vc::upcast(self.client_transition()))
-                        .to_resolved()
-                        .await?,
-                ),
-            ),
-            (
-                "next-ssr".into(),
-                ResolvedVc::upcast(self.ssr_transition().to_resolved().await?),
-            ),
-            (
-                "next-shared".into(),
-                ResolvedVc::upcast(self.shared_transition().to_resolved().await?),
-            ),
-            (
-                "next-server-utility".into(),
-                ResolvedVc::upcast(NextServerUtilityTransition::new().to_resolved().await?),
-            ),
-        ]
-        .into_iter()
-        .collect();
         Ok(ModuleAssetContext::new(
-            TransitionOptions {
-                named_transitions: transitions,
-                transition_rules: vec![TransitionRule::new(
-                    styles_rule_condition(),
-                    ResolvedVc::upcast(self.client_transition().to_resolved().await?),
-                )],
-                ..Default::default()
-            }
-            .cell(),
+            self.get_rsc_transitions(
+                self.ecmascript_client_reference_transition(),
+                Vc::upcast(self.ssr_transition()),
+                Vc::upcast(self.shared_transition()),
+            ),
             self.project().server_compile_time_info(),
             self.rsc_module_options_context(),
             self.rsc_resolve_options_context(),
@@ -375,10 +430,25 @@ impl AppProject {
 
     #[turbo_tasks::function]
     async fn edge_rsc_module_context(self: Vc<Self>) -> Result<Vc<ModuleAssetContext>> {
+        Ok(ModuleAssetContext::new(
+            self.get_rsc_transitions(
+                self.edge_ecmascript_client_reference_transition(),
+                Vc::upcast(self.edge_ssr_transition()),
+                Vc::upcast(self.edge_shared_transition()),
+            ),
+            self.project().edge_compile_time_info(),
+            self.edge_rsc_module_options_context(),
+            self.edge_rsc_resolve_options_context(),
+            Vc::cell("app-edge-rsc".into()),
+        ))
+    }
+
+    #[turbo_tasks::function]
+    async fn route_module_context(self: Vc<Self>) -> Result<Vc<ModuleAssetContext>> {
         let transitions = [
             (
                 ECMASCRIPT_CLIENT_TRANSITION_NAME.into(),
-                self.edge_client_reference_transition()
+                self.ecmascript_client_reference_transition()
                     .to_resolved()
                     .await?,
             ),
@@ -396,57 +466,6 @@ impl AppProject {
             ),
             (
                 "next-ssr".into(),
-                ResolvedVc::upcast(self.edge_ssr_transition().to_resolved().await?),
-            ),
-            (
-                "next-shared".into(),
-                ResolvedVc::upcast(self.edge_shared_transition().to_resolved().await?),
-            ),
-            (
-                "next-server-utility".into(),
-                ResolvedVc::upcast(NextServerUtilityTransition::new().to_resolved().await?),
-            ),
-        ]
-        .into_iter()
-        .collect();
-        Ok(ModuleAssetContext::new(
-            TransitionOptions {
-                named_transitions: transitions,
-                transition_rules: vec![TransitionRule::new(
-                    styles_rule_condition(),
-                    ResolvedVc::upcast(self.client_transition().to_resolved().await?),
-                )],
-                ..Default::default()
-            }
-            .cell(),
-            self.project().edge_compile_time_info(),
-            self.edge_rsc_module_options_context(),
-            self.edge_rsc_resolve_options_context(),
-            Vc::cell("app-edge-rsc".into()),
-        ))
-    }
-
-    #[turbo_tasks::function]
-    async fn route_module_context(self: Vc<Self>) -> Result<Vc<ModuleAssetContext>> {
-        let transitions = [
-            (
-                ECMASCRIPT_CLIENT_TRANSITION_NAME.into(),
-                self.client_reference_transition().to_resolved().await?,
-            ),
-            (
-                "next-dynamic".into(),
-                ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
-            ),
-            (
-                "next-dynamic-client".into(),
-                ResolvedVc::upcast(
-                    NextDynamicTransition::new_client(Vc::upcast(self.client_transition()))
-                        .to_resolved()
-                        .await?,
-                ),
-            ),
-            (
-                "next-ssr".into(),
                 ResolvedVc::upcast(self.ssr_transition().to_resolved().await?),
             ),
             (
@@ -463,6 +482,7 @@ impl AppProject {
 
         Ok(ModuleAssetContext::new(
             TransitionOptions {
+                // TODO use get_rsc_transitions as well?
                 named_transitions: transitions,
                 ..Default::default()
             }
@@ -479,7 +499,7 @@ impl AppProject {
         let transitions = [
             (
                 ECMASCRIPT_CLIENT_TRANSITION_NAME.into(),
-                self.edge_client_reference_transition()
+                self.edge_ecmascript_client_reference_transition()
                     .to_resolved()
                     .await?,
             ),
@@ -512,6 +532,7 @@ impl AppProject {
         .collect();
         Ok(ModuleAssetContext::new(
             TransitionOptions {
+                // TODO use get_rsc_transitions as well?
                 named_transitions: transitions,
                 ..Default::default()
             }
@@ -599,13 +620,44 @@ impl AppProject {
     }
 
     #[turbo_tasks::function]
-    fn ssr_transition(self: Vc<Self>) -> Vc<ContextTransition> {
-        ContextTransition::new(
+    async fn ssr_module_context(self: Vc<Self>) -> Result<Vc<ModuleAssetContext>> {
+        let transitions = [
+            (
+                "next-dynamic".into(),
+                ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
+            ),
+            (
+                "next-dynamic-client".into(),
+                ResolvedVc::upcast(
+                    NextDynamicTransition::new_client(Vc::upcast(self.client_transition()))
+                        .to_resolved()
+                        .await?,
+                ),
+            ),
+            (
+                "next-shared".into(),
+                ResolvedVc::upcast(self.shared_transition().to_resolved().await?),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        Ok(ModuleAssetContext::new(
+            TransitionOptions {
+                named_transitions: transitions,
+                ..Default::default()
+            }
+            .cell(),
             self.project().server_compile_time_info(),
             self.ssr_module_options_context(),
             self.ssr_resolve_options_context(),
             Vc::cell("app-ssr".into()),
-        )
+        ))
+    }
+
+    #[turbo_tasks::function]
+    fn ssr_transition(self: Vc<Self>) -> Vc<FullContextTransition> {
+        let module_context = self.ssr_module_context();
+        FullContextTransition::new(module_context)
     }
 
     #[turbo_tasks::function]
@@ -619,13 +671,44 @@ impl AppProject {
     }
 
     #[turbo_tasks::function]
-    fn edge_ssr_transition(self: Vc<Self>) -> Vc<ContextTransition> {
-        ContextTransition::new(
+    async fn edge_ssr_module_context(self: Vc<Self>) -> Result<Vc<ModuleAssetContext>> {
+        let transitions = [
+            (
+                "next-dynamic".into(),
+                ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
+            ),
+            (
+                "next-dynamic-client".into(),
+                ResolvedVc::upcast(
+                    NextDynamicTransition::new_client(Vc::upcast(self.client_transition()))
+                        .to_resolved()
+                        .await?,
+                ),
+            ),
+            (
+                "next-shared".into(),
+                ResolvedVc::upcast(self.edge_shared_transition().to_resolved().await?),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        Ok(ModuleAssetContext::new(
+            TransitionOptions {
+                named_transitions: transitions,
+                ..Default::default()
+            }
+            .cell(),
             self.project().edge_compile_time_info(),
             self.edge_ssr_module_options_context(),
             self.edge_ssr_resolve_options_context(),
             Vc::cell("app-edge-ssr".into()),
-        )
+        ))
+    }
+
+    #[turbo_tasks::function]
+    fn edge_ssr_transition(self: Vc<Self>) -> Vc<FullContextTransition> {
+        let module_context = self.edge_ssr_module_context();
+        FullContextTransition::new(module_context)
     }
 
     #[turbo_tasks::function]
@@ -725,57 +808,94 @@ impl AppProject {
     }
 
     #[turbo_tasks::function]
-    pub async fn app_module_graph(
+    pub async fn app_module_graphs(
         &self,
+        endpoint: Vc<AppEndpoint>,
         rsc_entry: ResolvedVc<Box<dyn Module>>,
-    ) -> Result<Vc<ModuleGraph>> {
+        extra_entries: Vc<EvaluatableAssets>,
+        has_layout_segments: bool,
+    ) -> Result<Vc<ModuleGraphs>> {
+        let extra_entries = extra_entries
+            .await?
+            .into_iter()
+            .map(|m| *ResolvedVc::upcast(*m));
+
         if *self.project.per_page_module_graph().await? {
             // Implements layout segment optimization to compute a graph "chain" for each layout
             // segment
             async move {
-                let ServerEntries {
-                    server_utils,
-                    server_component_entries,
-                } = &*find_server_entries(*rsc_entry).await?;
-
                 let mut graphs = vec![];
+                let mut visited_modules = if has_layout_segments {
+                    let ServerEntries {
+                        server_utils,
+                        server_component_entries,
+                    } = &*find_server_entries(*rsc_entry).await?;
 
-                let mut visited_modules = VisitedModules::empty();
-
-                if !server_utils.is_empty() {
                     let graph = SingleModuleGraph::new_with_entries_visited(
-                        server_utils.iter().map(|m| **m).collect(),
-                        visited_modules,
+                        server_utils
+                            .iter()
+                            .map(|m| **m)
+                            .chain(extra_entries)
+                            .collect(),
+                        VisitedModules::empty(),
                     );
                     graphs.push(graph);
-                    visited_modules = VisitedModules::from_graph(graph)
-                }
+                    let mut visited_modules = VisitedModules::from_graph(graph);
 
-                for module in server_component_entries.iter() {
-                    let graph = SingleModuleGraph::new_with_entries_visited(
-                        vec![Vc::upcast(**module)],
-                        visited_modules,
-                    );
-                    graphs.push(graph);
-                    let is_layout =
-                        module.server_path().file_stem().await?.as_deref() == Some("layout");
-                    if is_layout {
-                        // Only propagate the visited_modules of the parent layout(s), not across
-                        // siblings such as loading.js and page.js.
-                        visited_modules = visited_modules.concatenate(graph);
+                    for module in server_component_entries.iter() {
+                        let graph = SingleModuleGraph::new_with_entries_visited(
+                            vec![Vc::upcast(**module)],
+                            visited_modules,
+                        );
+                        graphs.push(graph);
+                        let is_layout =
+                            module.server_path().file_stem().await?.as_deref() == Some("layout");
+                        visited_modules = if is_layout {
+                            // Only propagate the visited_modules of the parent layout(s), not
+                            // across siblings such as loading.js and
+                            // page.js.
+                            visited_modules.concatenate(graph)
+                        } else {
+                            // Prevents graph index from getting out of sync.
+                            // TODO We should remove VisitedModule entirely in favor of lookups
+                            // in SingleModuleGraph
+                            visited_modules.with_incremented_index()
+                        };
                     }
-                }
+                    visited_modules
+                } else {
+                    let graph = SingleModuleGraph::new_with_entries_visited(
+                        extra_entries.collect::<_>(),
+                        VisitedModules::empty(),
+                    );
+                    graphs.push(graph);
+                    VisitedModules::from_graph(graph)
+                };
 
                 let graph =
                     SingleModuleGraph::new_with_entries_visited(vec![*rsc_entry], visited_modules);
                 graphs.push(graph);
+                visited_modules = visited_modules.concatenate(graph);
 
-                Ok(ModuleGraph::from_graphs(graphs))
+                let base = ModuleGraph::from_graphs(graphs.clone());
+                let additional_entries = endpoint.additional_root_modules(base);
+                let additional_module_graph = SingleModuleGraph::new_with_entries_visited(
+                    additional_entries.await?.into_iter().map(|m| **m).collect(),
+                    visited_modules,
+                );
+                graphs.push(additional_module_graph);
+
+                let full = ModuleGraph::from_graphs(graphs);
+                Ok(ModuleGraphs {
+                    base: base.to_resolved().await?,
+                    full: full.to_resolved().await?,
+                }
+                .cell())
             }
             .instrument(tracing::info_span!("module graph for endpoint"))
             .await
         } else {
-            Ok(self.project.whole_app_module_graph())
+            Ok(self.project.whole_app_module_graphs())
         }
     }
 }
@@ -790,8 +910,8 @@ pub fn app_entry_point_to_route(
             pages
                 .into_iter()
                 .map(|page| AppPageRoute {
-                    original_name: page.to_string(),
-                    html_endpoint: Vc::upcast(
+                    original_name: RcStr::from(page.to_string()),
+                    html_endpoint: ResolvedVc::upcast(
                         AppEndpoint {
                             ty: AppEndpointType::Page {
                                 ty: AppPageEndpointType::Html,
@@ -800,9 +920,9 @@ pub fn app_entry_point_to_route(
                             app_project,
                             page: page.clone(),
                         }
-                        .cell(),
+                        .resolved_cell(),
                     ),
-                    rsc_endpoint: Vc::upcast(
+                    rsc_endpoint: ResolvedVc::upcast(
                         AppEndpoint {
                             ty: AppEndpointType::Page {
                                 ty: AppPageEndpointType::Rsc,
@@ -811,7 +931,7 @@ pub fn app_entry_point_to_route(
                             app_project,
                             page,
                         }
-                        .cell(),
+                        .resolved_cell(),
                     ),
                 })
                 .collect(),
@@ -821,7 +941,7 @@ pub fn app_entry_point_to_route(
             path,
             root_layouts,
         } => Route::AppRoute {
-            original_name: page.to_string(),
+            original_name: page.to_string().into(),
             endpoint: ResolvedVc::upcast(
                 AppEndpoint {
                     ty: AppEndpointType::Route { path, root_layouts },
@@ -832,7 +952,7 @@ pub fn app_entry_point_to_route(
             ),
         },
         AppEntrypoint::AppMetadata { page, metadata } => Route::AppRoute {
-            original_name: page.to_string(),
+            original_name: page.to_string().into(),
             endpoint: ResolvedVc::upcast(
                 AppEndpoint {
                     ty: AppEndpointType::Metadata { metadata },
@@ -1000,7 +1120,15 @@ impl AppEndpoint {
         let runtime = app_entry.config.await?.runtime.unwrap_or_default();
 
         let rsc_entry = app_entry.rsc_entry;
-        let module_graph = this.app_project.app_module_graph(*rsc_entry);
+        let module_graphs = this
+            .app_project
+            .app_module_graphs(
+                self,
+                *rsc_entry,
+                this.app_project.client_runtime_entries(),
+                matches!(this.ty, AppEndpointType::Page { .. }),
+            )
+            .await?;
 
         let client_chunking_context = project.client_chunking_context();
 
@@ -1020,7 +1148,7 @@ impl AppEndpoint {
             AssetIdent::from_path(project.project_path())
                 .with_modifier(client_shared_chunks_modifier()),
             this.app_project.client_runtime_entries(),
-            module_graph,
+            *module_graphs.full,
             client_chunking_context,
         )
         .await?;
@@ -1036,17 +1164,22 @@ impl AppEndpoint {
         }
         let client_shared_availability_info = client_shared_chunk_group.availability_info;
 
-        let reduced_graphs =
-            get_reduced_graphs_for_endpoint(module_graph, *project.per_page_module_graph().await?);
+        let reduced_graphs = get_reduced_graphs_for_endpoint(
+            *module_graphs.base,
+            *project.per_page_module_graph().await?,
+        );
         let next_dynamic_imports = reduced_graphs
             .get_next_dynamic_imports_for_endpoint(*rsc_entry)
             .await?;
 
-        let client_references = reduced_graphs.get_client_references_for_endpoint(*rsc_entry);
+        let client_references = reduced_graphs.get_client_references_for_endpoint(
+            *rsc_entry,
+            matches!(this.ty, AppEndpointType::Page { .. }),
+        );
 
         let client_references_chunks = get_app_client_references_chunks(
             client_references,
-            module_graph,
+            *module_graphs.full,
             client_chunking_context,
             Value::new(client_shared_availability_info),
             ssr_chunking_context,
@@ -1194,7 +1327,7 @@ impl AppEndpoint {
                 NextRuntime::Edge => Vc::upcast(this.app_project.edge_rsc_module_context()),
                 NextRuntime::NodeJs => Vc::upcast(this.app_project.rsc_module_context()),
             },
-            module_graph,
+            *module_graphs.full,
             this.app_project
                 .project()
                 .runtime_chunking_context(process_client_assets, runtime),
@@ -1210,7 +1343,7 @@ impl AppEndpoint {
                 *server_action_manifest_loader,
                 server_path,
                 process_client_assets,
-                module_graph,
+                *module_graphs.full,
             )
             .await?;
         let app_entry_chunks_ref = app_entry_chunks.await?;
@@ -1233,7 +1366,7 @@ impl AppEndpoint {
                     client_references_chunks,
                     rsc_app_entry_chunks: **app_entry_chunks,
                     rsc_app_entry_chunks_availability: Value::new(*app_entry_chunks_availability),
-                    module_graph,
+                    module_graph: *module_graphs.full,
                     client_chunking_context,
                     ssr_chunking_context,
                     next_config: project.next_config(),
@@ -1297,7 +1430,7 @@ impl AppEndpoint {
 
                 if emit_manifests {
                     let dynamic_import_entries = collect_next_dynamic_chunks(
-                        module_graph,
+                        *module_graphs.full,
                         Vc::upcast(client_chunking_context),
                         next_dynamic_imports,
                         NextDynamicChunkAvailability::ClientReferences(
@@ -1412,7 +1545,7 @@ impl AppEndpoint {
 
                     // create react-loadable-manifest for next/dynamic
                     let dynamic_import_entries = collect_next_dynamic_chunks(
-                        module_graph,
+                        *module_graphs.full,
                         Vc::upcast(client_chunking_context),
                         next_dynamic_imports,
                         NextDynamicChunkAvailability::ClientReferences(
@@ -1539,16 +1672,21 @@ impl AppEndpoint {
                     let client_references = client_references.await?;
                     let span = tracing::trace_span!("server utils");
                     async {
-                        let utils_module = IncludeModulesModule::new(
-                            AssetIdent::from_path(this.app_project.project().project_path())
-                                .with_modifier(server_utils_modifier()),
-                            client_references.server_utils.iter().map(|v| **v).collect(),
-                        );
-
+                        let server_utils = client_references
+                            .server_utils
+                            .iter()
+                            .map(|m| async move {
+                                Ok(*ResolvedVc::try_downcast::<Box<dyn ChunkableModule>>(*m)
+                                    .await?
+                                    .context("Expected server utils to be chunkable")?)
+                            })
+                            .try_join()
+                            .await?;
                         let chunk_group = chunking_context
-                            .chunk_group(
-                                utils_module.ident(),
-                                Vc::upcast(utils_module),
+                            .chunk_group_multiple(
+                                AssetIdent::from_path(this.app_project.project().project_path())
+                                    .with_modifier(server_utils_modifier()),
+                                ChunkableModules::interned(server_utils),
                                 module_graph,
                                 Value::new(current_availability_info),
                             )
@@ -1655,7 +1793,7 @@ async fn create_app_paths_manifest(
 #[turbo_tasks::value_impl]
 impl Endpoint for AppEndpoint {
     #[turbo_tasks::function]
-    async fn write_to_disk(self: ResolvedVc<Self>) -> Result<Vc<WrittenEndpoint>> {
+    async fn output(self: ResolvedVc<Self>) -> Result<Vc<EndpointOutput>> {
         let this = self.await?;
         let page_name = this.page.to_string();
         let span = match this.ty {
@@ -1678,19 +1816,12 @@ impl Endpoint for AppEndpoint {
                 tracing::info_span!("app endpoint metadata", name = page_name)
             }
         };
+
         async move {
             let output = self.output().await?;
-            let output_assets_op = output_assets_operation(self);
-            let output_assets = output_assets_op.connect();
-
+            let output_assets = self.output().output_assets();
             let node_root = this.app_project.project().node_root();
-
             let node_root_ref = &node_root.await?;
-
-            let _ = this
-                .app_project
-                .project()
-                .emit_all_output_assets(output_assets_op);
 
             let (server_paths, client_paths) = if this
                 .app_project
@@ -1716,7 +1847,7 @@ impl Endpoint for AppEndpoint {
             };
 
             let written_endpoint = match *output {
-                AppEndpointOutput::NodeJs { rsc_chunk, .. } => WrittenEndpoint::NodeJs {
+                AppEndpointOutput::NodeJs { rsc_chunk, .. } => EndpointOutputPaths::NodeJs {
                     server_entry_path: node_root_ref
                         .get_path_to(&*rsc_chunk.ident().path().await?)
                         .context("Node.js chunk entry path must be inside the node root")?
@@ -1724,12 +1855,20 @@ impl Endpoint for AppEndpoint {
                     server_paths,
                     client_paths,
                 },
-                AppEndpointOutput::Edge { .. } => WrittenEndpoint::Edge {
+                AppEndpointOutput::Edge { .. } => EndpointOutputPaths::Edge {
                     server_paths,
                     client_paths,
                 },
             };
-            anyhow::Ok(written_endpoint.cell())
+
+            anyhow::Ok(
+                EndpointOutput {
+                    output_assets: output_assets.to_resolved().await?,
+                    output_paths: written_endpoint.resolved_cell(),
+                    project: this.app_project.project().to_resolved().await?,
+                }
+                .cell(),
+            )
         }
         .instrument(span)
         .await
@@ -1756,14 +1895,47 @@ impl Endpoint for AppEndpoint {
 
     #[turbo_tasks::function]
     async fn root_modules(self: Vc<Self>) -> Result<Vc<Modules>> {
-        let rsc_entry = self.app_endpoint_entry().await?.rsc_entry;
-        Ok(Vc::cell(vec![rsc_entry]))
+        Ok(Vc::cell(vec![self.app_endpoint_entry().await?.rsc_entry]))
     }
-}
 
-#[turbo_tasks::function(operation)]
-fn output_assets_operation(endpoint: ResolvedVc<AppEndpoint>) -> Vc<OutputAssets> {
-    endpoint.output().output_assets()
+    #[turbo_tasks::function]
+    async fn additional_root_modules(
+        self: Vc<Self>,
+        graph: Vc<ModuleGraph>,
+    ) -> Result<Vc<Modules>> {
+        let this = self.await?;
+        let app_entry = self.app_endpoint_entry().await?;
+        let rsc_entry = app_entry.rsc_entry;
+        let runtime = app_entry.config.await?.runtime.unwrap_or_default();
+
+        let actions = get_reduced_graphs_for_endpoint(
+            graph,
+            *this.app_project.project().per_page_module_graph().await?,
+        )
+        .get_server_actions_for_endpoint(
+            *rsc_entry,
+            match runtime {
+                NextRuntime::Edge => Vc::upcast(this.app_project.edge_rsc_module_context()),
+                NextRuntime::NodeJs => Vc::upcast(this.app_project.rsc_module_context()),
+            },
+        );
+
+        let server_actions_loader = ResolvedVc::upcast(
+            build_server_actions_loader(
+                this.app_project.project().project_path(),
+                app_entry.original_name.clone(),
+                actions,
+                match runtime {
+                    NextRuntime::Edge => Vc::upcast(this.app_project.edge_rsc_module_context()),
+                    NextRuntime::NodeJs => Vc::upcast(this.app_project.rsc_module_context()),
+                },
+            )
+            .to_resolved()
+            .await?,
+        );
+
+        Ok(Vc::cell(vec![server_actions_loader]))
+    }
 }
 
 #[turbo_tasks::value]
