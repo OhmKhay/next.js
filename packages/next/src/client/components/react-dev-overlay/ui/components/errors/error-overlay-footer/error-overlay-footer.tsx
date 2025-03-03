@@ -1,6 +1,5 @@
 import { ErrorFeedback } from './error-feedback/error-feedback'
 import { styles as feedbackStyles } from './error-feedback/error-feedback'
-import { noop as css } from '../../../../utils/noop-template'
 
 export type ErrorOverlayFooterProps = {
   errorCode: string | undefined
@@ -23,14 +22,14 @@ export function ErrorOverlayFooter({
   )
 }
 
-export const styles = css`
+export const styles = `
   .error-overlay-footer {
     display: flex;
     flex-direction: row;
     justify-content: space-between;
 
-    gap: var(--size-gap);
-    padding: var(--size-3);
+    gap: 8px;
+    padding: 12px;
     background: var(--color-background-200);
     border-top: 1px solid var(--color-gray-400);
   }
@@ -39,7 +38,7 @@ export const styles = css`
     margin-left: auto;
 
     p {
-      font-size: 14px;
+      font-size: var(--size-14);
       font-weight: 500;
       margin: 0;
     }
@@ -48,9 +47,9 @@ export const styles = css`
   .error-overlay-footer-message {
     color: var(--color-gray-900);
     margin: 0;
-    font-size: 14px;
+    font-size: var(--size-14);
     font-weight: 400;
-    line-height: var(--size-font-big);
+    line-height: var(--size-20);
   }
 
   ${feedbackStyles}

@@ -1,6 +1,5 @@
 import type { VersionInfo } from '../../../../../../server/dev/parse-version-info'
 import { cx } from '../../utils/cx'
-import { noop as css } from '../../../utils/noop-template'
 
 export function VersionStalenessInfo({
   versionInfo,
@@ -88,15 +87,15 @@ export function getStaleness({ installed, staleness, expected }: VersionInfo) {
   return { text, indicatorClass, title }
 }
 
-export const styles = css`
+export const styles = `
   .nextjs-container-build-error-version-status {
     -webkit-font-smoothing: antialiased;
     display: flex;
     justify-content: center;
     align-items: center;
-    gap: var(--size-1);
+    gap: 4px;
 
-    height: 26px;
+    height: var(--size-26);
     padding: 6px 8px 6px 6px;
     background: var(--color-background-100);
     background-clip: padding-box;
@@ -105,9 +104,9 @@ export const styles = css`
     border-radius: var(--rounded-full);
 
     color: var(--color-gray-900);
-    font-size: 12px;
+    font-size: var(--size-12);
     font-weight: 500;
-    line-height: var(--size-4);
+    line-height: var(--size-16);
   }
 
   a.nextjs-container-build-error-version-status {

@@ -1,25 +1,14 @@
-import { DevToolsInfo } from './dev-tools-info'
+import { DevToolsInfo, type DevToolsInfoPropsCore } from './dev-tools-info'
 import { CopyButton } from '../../../copy-button'
-import { noop as css } from '../../../../../utils/noop-template'
+import type { HTMLProps } from 'react'
 
-export function TurbopackInfo({
-  isOpen,
-  setIsOpen,
-  setPreviousOpen,
-  ...props
-}: {
-  isOpen: boolean
-  setIsOpen: (isOpen: boolean) => void
-  setPreviousOpen: (isOpen: boolean) => void
-  style?: React.CSSProperties
-  ref?: React.RefObject<HTMLElement | null>
-}) {
+export function TurbopackInfo(
+  props: DevToolsInfoPropsCore & HTMLProps<HTMLDivElement>
+) {
   return (
     <DevToolsInfo
       title="Turbopack"
       learnMoreLink="https://nextjs.org/docs/app/api-reference/turbopack"
-      setIsOpen={setIsOpen}
-      setPreviousOpen={setPreviousOpen}
       {...props}
     >
       <article className="dev-tools-info-article">
@@ -111,20 +100,20 @@ export function TurbopackInfo({
   )
 }
 
-export const DEV_TOOLS_INFO_TURBOPACK_INFO_STYLES = css`
+export const DEV_TOOLS_INFO_TURBOPACK_INFO_STYLES = `
   .dev-tools-info-code {
     background: var(--color-gray-400);
     color: var(--color-gray-1000);
-    font-family: var(--font-stack-mono);
-    padding: var(--size-0_5) var(--size-1);
+    font-family: var(--font-stack-monospace);
+    padding: 2px 4px;
     margin: 0;
-    font-size: 13px;
+    font-size: var(--size-13);
     white-space: break-spaces;
     border-radius: var(--rounded-md-2);
   }
 
   .dev-tools-info-code-block-container {
-    padding: var(--size-1_5);
+    padding: 6px;
   }
 
   .dev-tools-info-code-block {
@@ -137,8 +126,8 @@ export const DEV_TOOLS_INFO_TURBOPACK_INFO_STYLES = css`
 
   .dev-tools-info-code-block-pre {
     margin: 0;
-    font-family: var(--font-stack-mono);
-    font-size: 12px;
+    font-family: var(--font-stack-monospace);
+    font-size: var(--size-12);
   }
 
   .dev-tools-info-copy-button {
@@ -147,11 +136,11 @@ export const DEV_TOOLS_INFO_TURBOPACK_INFO_STYLES = css`
     display: flex;
     justify-content: center;
     align-items: center;
-    right: var(--size-2);
-    top: var(--size-2);
-    padding: var(--size-1);
-    height: var(--size-6);
-    width: var(--size-6);
+    right: 8px;
+    top: 8px;
+    padding: 4px;
+    height: var(--size-24);
+    width: var(--size-24);
     border-radius: var(--rounded-md-2);
     border: 1px solid var(--color-gray-alpha-400);
     background: var(--color-background-100);
@@ -160,7 +149,7 @@ export const DEV_TOOLS_INFO_TURBOPACK_INFO_STYLES = css`
   .dev-tools-info-code-block-line {
     display: block;
     line-height: 1.5;
-    padding: 0 1rem;
+    padding: 0 16px;
   }
 
   .dev-tools-info-code-block-line.dev-tools-info-highlight {

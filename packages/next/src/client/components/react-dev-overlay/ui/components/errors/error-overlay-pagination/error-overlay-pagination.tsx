@@ -5,7 +5,6 @@ import {
   useRef,
   useState,
 } from 'react'
-import { noop as css } from '../../../../utils/noop-template'
 import { LeftArrow } from '../../../icons/left-arrow'
 import { RightArrow } from '../../../icons/right-arrow'
 import type { ReadyRuntimeError } from '../../../../utils/get-error-by-type'
@@ -152,7 +151,7 @@ export function ErrorOverlayPagination({
   )
 }
 
-export const styles = css`
+export const styles = `
   .error-overlay-pagination {
     -webkit-font-smoothing: antialiased;
     display: flex;
@@ -165,9 +164,9 @@ export const styles = css`
   .error-overlay-pagination-count {
     color: var(--color-gray-900);
     text-align: center;
-    font-size: var(--size-font-small);
+    font-size: var(--size-14);
     font-weight: 500;
-    line-height: 16px;
+    line-height: var(--size-16);
     font-variant-numeric: tabular-nums;
   }
 
@@ -176,13 +175,18 @@ export const styles = css`
     justify-content: center;
     align-items: center;
 
-    width: 24px;
-    height: 24px;
+    width: var(--size-24);
+    height: var(--size-24);
     background: var(--color-gray-300);
     flex-shrink: 0;
 
     border: none;
     border-radius: var(--rounded-full);
+
+    svg {
+      width: var(--size-16);
+      height: var(--size-16);
+    }
 
     &:focus-visible {
       outline: var(--focus-ring);
