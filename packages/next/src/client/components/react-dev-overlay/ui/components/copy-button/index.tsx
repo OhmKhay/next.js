@@ -1,5 +1,4 @@
 import * as React from 'react'
-import { noop as css } from '../../../utils/noop-template'
 import { cx } from '../../utils/cx'
 
 function useCopyLegacy(content: string) {
@@ -217,6 +216,7 @@ function CopyIcon(props: React.SVGProps<SVGSVGElement>) {
     <svg
       width="14"
       height="14"
+      viewBox="0 0 14 14"
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       {...props}
@@ -246,9 +246,14 @@ function CopySuccessIcon() {
   )
 }
 
-export const COPY_BUTTON_STYLES = css`
+export const COPY_BUTTON_STYLES = `
   .nextjs-data-copy-button {
     color: inherit;
+
+    svg {
+      width: var(--size-16);
+      height: var(--size-16);
+    }
   }
   .nextjs-data-copy-button--initial:hover {
     cursor: pointer;

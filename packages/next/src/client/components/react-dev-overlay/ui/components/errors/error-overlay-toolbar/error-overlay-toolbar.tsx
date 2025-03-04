@@ -1,6 +1,5 @@
 import type { DebugInfo } from '../../../../types'
 import { NodejsInspectorButton } from './nodejs-inspector-button'
-import { noop as css } from '../../../../utils/noop-template'
 import { CopyStackTraceButton } from './copy-stack-trace-button'
 import { DocsLinkButton } from './docs-link-button'
 
@@ -24,10 +23,10 @@ export function ErrorOverlayToolbar({
   )
 }
 
-export const styles = css`
+export const styles = `
   .error-overlay-toolbar {
     display: flex;
-    gap: var(--size-1_5);
+    gap: 6px;
   }
 
   .nodejs-inspector-button,
@@ -37,13 +36,18 @@ export const styles = css`
     justify-content: center;
     align-items: center;
 
-    width: 28px;
-    height: 28px;
+    width: var(--size-28);
+    height: var(--size-28);
     background: var(--color-background-100);
     background-clip: padding-box;
     border: 1px solid var(--color-gray-alpha-400);
     box-shadow: var(--shadow-small);
     border-radius: var(--rounded-full);
+
+    svg {
+      width: var(--size-14);
+      height: var(--size-14);
+    }
 
     &:focus {
       outline: var(--focus-ring);
@@ -58,6 +62,7 @@ export const styles = css`
     }
 
     &:disabled {
+      background-color: var(--color-gray-100);
       cursor: not-allowed;
     }
   }

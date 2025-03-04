@@ -1,5 +1,4 @@
 import { Dialog } from '../../dialog/dialog'
-import { noop as css } from '../../../../utils/noop-template'
 
 type ErrorOverlayDialogProps = {
   children?: React.ReactNode
@@ -26,20 +25,16 @@ export function ErrorOverlayDialog({
   )
 }
 
-export const DIALOG_STYLES = css`
+export const DIALOG_STYLES = `
   .error-overlay-dialog {
     overflow-y: auto;
     -webkit-font-smoothing: antialiased;
     background: var(--color-background-100);
     background-clip: padding-box;
     border: 1px solid var(--color-gray-400);
-    border-radius: var(--next-dialog-radius);
+    border-radius: var(--rounded-xl);
     box-shadow: var(--shadow-menu);
     position: relative;
-
-    @media (prefers-color-scheme: dark) {
-      border-color: var(--color-gray-400);
-    }
 
     &:has(
         ~ [data-nextjs-error-overlay-nav] .error-overlay-notch[data-side='left']

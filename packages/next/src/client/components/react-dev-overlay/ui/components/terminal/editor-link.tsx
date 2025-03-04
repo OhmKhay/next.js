@@ -1,5 +1,4 @@
 import { useOpenInEditor } from '../../utils/use-open-in-editor'
-import { noop as css } from '../../../utils/noop-template'
 
 type EditorLinkProps = {
   file: string
@@ -44,11 +43,11 @@ export function EditorLink({ file, location }: EditorLinkProps) {
   )
 }
 
-export const EDITOR_LINK_STYLES = css`
+export const EDITOR_LINK_STYLES = `
   [data-with-open-in-editor-link] svg {
     width: auto;
-    height: var(--size-font-small);
-    margin-left: var(--size-gap);
+    height: var(--size-14);
+    margin-left: 8px;
   }
   [data-with-open-in-editor-link] {
     cursor: pointer;
@@ -57,6 +56,6 @@ export const EDITOR_LINK_STYLES = css`
     text-decoration: underline dotted;
   }
   [data-with-open-in-editor-link-import-trace] {
-    margin-left: var(--size-gap-double);
+    margin-left: 16px;
   }
 `

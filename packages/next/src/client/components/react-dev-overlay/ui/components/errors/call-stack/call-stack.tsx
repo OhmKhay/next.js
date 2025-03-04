@@ -1,7 +1,6 @@
 import type { OriginalStackFrame } from '../../../../utils/stack-frame'
 import { useMemo, useState, useRef } from 'react'
 import { CallStackFrame } from '../../call-stack-frame/call-stack-frame'
-import { noop as css } from '../../../../utils/noop-template'
 
 interface CallStackProps {
   frames: OriginalStackFrame[]
@@ -72,7 +71,7 @@ export function CallStack({ frames, dialogResizerRef }: CallStackProps) {
             className="error-overlay-call-stack-ignored-list-toggle-button"
             onClick={onToggleIgnoreList}
           >
-            {`${isIgnoreListOpen ? 'Hide' : 'Show'} ${ignoreListLength} Ignored-listed Frames`}
+            {`${isIgnoreListOpen ? 'Hide' : 'Show'} ${ignoreListLength} ignore-listed frames`}
             <ChevronUpDown />
           </button>
         )}
@@ -119,18 +118,18 @@ function ChevronUpDown() {
   )
 }
 
-export const CALL_STACK_STYLES = css`
+export const CALL_STACK_STYLES = `
   .error-overlay-call-stack-container {
     position: relative;
-    margin-top: var(--size-2);
+    margin-top: 8px;
   }
 
   .error-overlay-call-stack-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    min-height: 28px;
-    padding: var(--size-2) var(--size-2) var(--size-3) var(--size-1);
+    min-height: var(--size-28);
+    padding: 8px 8px 12px 4px;
     width: 100%;
   }
 
@@ -138,14 +137,13 @@ export const CALL_STACK_STYLES = css`
     display: flex;
     justify-content: space-between;
     align-items: center;
-    gap: var(--size-2);
+    gap: 8px;
 
     margin: 0;
 
     color: var(--color-gray-1000);
-    font-size: var(--size-font);
+    font-size: var(--size-16);
     font-weight: 500;
-    line-height: var(--size-5);
   }
 
   .error-overlay-call-stack-count {
@@ -153,15 +151,15 @@ export const CALL_STACK_STYLES = css`
     justify-content: center;
     align-items: center;
 
-    width: 20px;
-    height: 20px;
-    gap: var(--size-1);
+    width: var(--size-20);
+    height: var(--size-20);
+    gap: 4px;
 
     color: var(--color-gray-1000);
     text-align: center;
-    font-size: var(--size-font-11);
+    font-size: var(--size-11);
     font-weight: 500;
-    line-height: var(--size-4);
+    line-height: var(--size-16);
 
     border-radius: var(--rounded-full);
     background: var(--color-gray-300);
@@ -173,8 +171,8 @@ export const CALL_STACK_STYLES = css`
     align-items: center;
     gap: 6px;
     color: var(--color-gray-900);
-    font-size: var(--size-font-small);
-    line-height: var(--size-5);
+    font-size: var(--size-14);
+    line-height: var(--size-20);
     border-radius: 6px;
     padding: 4px 6px;
     margin-right: -6px;
@@ -186,6 +184,11 @@ export const CALL_STACK_STYLES = css`
 
     &:focus {
       outline: var(--focus-ring);
+    }
+
+    svg {
+      width: var(--size-16);
+      height: var(--size-16);
     }
   }
 `
