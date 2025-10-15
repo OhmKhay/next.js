@@ -843,7 +843,8 @@ impl ReactServerComponentValidator {
                             );
                         }
                     }
-                    "dynamicParams" | "dynamic" | "fetchCache" | "revalidate" => {
+                    "dynamicParams" | "dynamic" | "fetchCache" | "revalidate"
+                    | "experimental_ppr" => {
                         if self.cache_components_enabled {
                             possibly_invalid_exports.insert(
                                 export_name.clone(),
